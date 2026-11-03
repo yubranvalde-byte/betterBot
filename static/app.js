@@ -1,13 +1,15 @@
 // ==========================================
-// BetterBot — The Intelligence Factory UI
+// BetterBot — Multi-Window Studio Architecture UI (v3.0)
 // ==========================================
 
 let currentSession = null;
 let isStreaming = false;
 let showRawPrompt = false;
 let currentDiffMode = "unified"; // "unified" | "split"
+let activeWorkspaceView = "view-interview";
 let activeStreamingNode = null;
 let activeStreamingDesc = "";
+let timelineFilterQuery = "";
 
 const ICONS = {
   check: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
@@ -40,15 +42,27 @@ const NODE_ROLES = {
   node_4_adjudicator: "Node 4: The Adjudicator — בקרת איכות ורגרסיה",
 };
 
+const NODE_SHORT_LABELS = {
+  node_1_helper: "Node 1 · The Helper",
+  node_2_construct: "Node 2 · The Construct",
+  node_3_upgrader: "Node 3 · The Upgrader",
+  node_4_adjudicator: "Node 4 · The Adjudicator",
+};
+
 const els = {
   modelNameText: document.getElementById("modelNameText"),
   sessionSelect: document.getElementById("sessionSelect"),
   newSessionBtn: document.getElementById("newSessionBtn"),
 
+  headerTelemetryPill: document.getElementById("headerTelemetryPill"),
+  telemetryLiveDot: document.getElementById("telemetryLiveDot"),
+  headerActiveNodeText: document.getElementById("headerActiveNodeText"),
   globalStageBadge: document.getElementById("globalStageBadge"),
   globalStageDesc: document.getElementById("globalStageDesc"),
   cbDots: document.getElementById("cbDots"),
   iterationBadge: document.getElementById("iterationBadge"),
+  archCbText: document.getElementById("archCbText"),
+  timelineCountPill: document.getElementById("timelineCountPill"),
 
   presetsContainer: document.getElementById("presetsContainer"),
   chatMessages: document.getElementById("chatMessages"),
@@ -63,6 +77,8 @@ const els = {
   overrideNotice: document.getElementById("overrideNotice"),
   chatSubheader: document.getElementById("chatSubheader"),
 
+  promptToolbarGroup: document.getElementById("promptToolbarGroup"),
+  blueprintToolbarGroup: document.getElementById("blueprintToolbarGroup"),
   promptStatusPill: document.getElementById("promptStatusPill"),
   qaCountPill: document.getElementById("qaCountPill"),
   promptVersionTag: document.getElementById("promptVersionTag"),
@@ -85,6 +101,10 @@ const els = {
   copyXmlBtn: document.getElementById("copyXmlBtn"),
   bpVersionText: document.getElementById("bpVersionText"),
 
+  artifactUpgraderForm: document.getElementById("artifactUpgraderForm"),
+  artifactUpgraderInput: document.getElementById("artifactUpgraderInput"),
+  artifactUpgraderSendBtn: document.getElementById("artifactUpgraderSendBtn"),
+
   qaLogsList: document.getElementById("qaLogsList"),
   diffComparisonSection: document.getElementById("diffComparisonSection"),
   diffUnifiedContainer: document.getElementById("diffUnifiedContainer"),
@@ -93,6 +113,7 @@ const els = {
   diffChampionPre: document.getElementById("diffChampionPre"),
   diffChallengerPre: document.getElementById("diffChallengerPre"),
 
+  timelineSearchInput: document.getElementById("timelineSearchInput"),
   timelineList: document.getElementById("timelineList"),
   toast: document.getElementById("toast"),
 };
@@ -139,6 +160,7 @@ async function createNewSession() {
   const res = await fetch("/api/sessions", { method: "POST" });
   currentSession = await res.json();
   await refreshSessionSelector();
+  switchWorkspaceView("view-interview");
   renderAll(currentSession);
   els.userInput.focus();
 }
@@ -159,6 +181,54 @@ async function refreshSessionSelector() {
 }
 
 // ==========================================
+// Multi-Window Studio Routing & Sub-Tab Switching
+// ==========================================
+function switchWorkspaceView(viewId) {
+  if (!viewId) return;
+  activeWorkspaceView = viewId;
+
+  document.querySelectorAll(".nav-rail-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.view === viewId);
+  });
+
+  document.querySelectorAll(".studio-view").forEach((view) => {
+    view.classList.toggle("active", view.id === viewId);
+  });
+
+  if (viewId === "view-interview" && els.userInput) {
+    els.userInput.focus();
+  }
+}
+
+function switchTab(tabId) {
+  if (tabId === "qaTab") {
+    switchWorkspaceView("view-qa");
+    return;
+  }
+  if (tabId === "timelineTab") {
+    switchWorkspaceView("view-pipeline");
+    return;
+  }
+
+  switchWorkspaceView("view-artifacts");
+
+  document.querySelectorAll(".tab-btn").forEach((b) => {
+    const isActive = b.dataset.tab === tabId;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", isActive ? "true" : "false");
+  });
+
+  document.querySelectorAll("#view-artifacts .tab-content").forEach((c) => {
+    c.classList.toggle("active", c.id === tabId);
+  });
+
+  if (els.promptToolbarGroup && els.blueprintToolbarGroup) {
+    els.promptToolbarGroup.classList.toggle("hidden", tabId !== "promptTab");
+    els.blueprintToolbarGroup.classList.toggle("hidden", tabId !== "blueprintTab");
+  }
+}
+
+// ==========================================
 // Event Bindings
 // ==========================================
 function bindUIEvents() {
@@ -172,18 +242,35 @@ function bindUIEvents() {
     renderAll(currentSession);
   });
 
-  // Tabs switching
+  // Navigation Rail View Buttons
+  document.querySelectorAll(".nav-rail-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      switchWorkspaceView(btn.dataset.view);
+    });
+  });
+
+  // Header Telemetry Pill -> Opens Pipeline Architecture & Timeline View
+  if (els.headerTelemetryPill) {
+    els.headerTelemetryPill.addEventListener("click", () => {
+      switchWorkspaceView("view-pipeline");
+    });
+  }
+
+  // Artifact Sub-Tabs switching (Prompt vs XML Blueprint)
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       switchTab(btn.dataset.tab);
     });
   });
 
-  // Interactive Pipeline Node Navigation
+  // Interactive Pipeline Node Navigation (from view-pipeline)
   const nodeRoutes = {
-    node_1_helper: () => els.userInput.focus(),
+    node_1_helper: () => {
+      switchWorkspaceView("view-interview");
+      els.userInput.focus();
+    },
     node_2_construct: () => switchTab("blueprintTab"),
-    node_4_adjudicator: () => switchTab("qaTab"),
+    node_4_adjudicator: () => switchWorkspaceView("view-qa"),
     node_3_upgrader: () => switchTab("promptTab"),
   };
 
@@ -231,7 +318,7 @@ function bindUIEvents() {
     });
   });
 
-  // Form submit & Enter key
+  // Main Chat Form submit & Enter key
   els.chatForm.addEventListener("submit", (e) => {
     e.preventDefault();
     const text = els.userInput.value.trim();
@@ -248,6 +335,27 @@ function bindUIEvents() {
       }
     }
   });
+
+  // Quick Upgrader Command Bar inside view-artifacts
+  if (els.artifactUpgraderForm && els.artifactUpgraderInput) {
+    els.artifactUpgraderForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = els.artifactUpgraderInput.value.trim();
+      if (!text || isStreaming) return;
+      els.artifactUpgraderInput.value = "";
+      sendUserMessage(text);
+    });
+  }
+
+  // Timeline Search Filter
+  if (els.timelineSearchInput) {
+    els.timelineSearchInput.addEventListener("input", (e) => {
+      timelineFilterQuery = (e.target.value || "").trim().toLowerCase();
+      if (currentSession) {
+        renderTimelineTab(currentSession.timeline || []);
+      }
+    });
+  }
 
   // Toggle Raw vs Formatted Prompt
   els.toggleRawPromptBtn.addEventListener("click", () => {
@@ -288,17 +396,6 @@ function bindUIEvents() {
   });
 }
 
-function switchTab(tabId) {
-  document.querySelectorAll(".tab-btn").forEach((b) => {
-    const isActive = b.dataset.tab === tabId;
-    b.classList.toggle("active", isActive);
-    b.setAttribute("aria-selected", isActive ? "true" : "false");
-  });
-  document.querySelectorAll(".tab-content").forEach((c) => {
-    c.classList.toggle("active", c.id === tabId);
-  });
-}
-
 // ==========================================
 // Streaming Execution (SSE)
 // ==========================================
@@ -307,6 +404,7 @@ async function sendUserMessage(messageText) {
   isStreaming = true;
   els.userInput.value = "";
   els.sendBtn.disabled = true;
+  if (els.artifactUpgraderSendBtn) els.artifactUpgraderSendBtn.disabled = true;
   els.presetsContainer.classList.add("hidden");
 
   // Optimistically render user bubble
@@ -346,10 +444,13 @@ async function sendUserMessage(messageText) {
     activeStreamingNode = null;
     activeStreamingDesc = "";
     els.sendBtn.disabled = false;
+    if (els.artifactUpgraderSendBtn) els.artifactUpgraderSendBtn.disabled = false;
     els.activeExecutionBar.classList.add("hidden");
     if (currentSession) renderAll(currentSession);
     await refreshSessionSelector();
-    els.userInput.focus();
+    if (activeWorkspaceView === "view-interview") {
+      els.userInput.focus();
+    }
   }
 }
 
@@ -406,7 +507,7 @@ function handleSSEBlock(block) {
       switchTab("promptTab");
       showToast("הפרומפט אושר על ידי מבקר האיכות (PASS)", "check");
     } else if (currentSession.status === "escalated") {
-      switchTab("qaTab");
+      switchWorkspaceView("view-qa");
       showToast("נדרשת הכוונה ידנית (Circuit Breaker)", "alert");
     }
   } else if (eventType === "error") {
@@ -444,8 +545,11 @@ function renderPipelineStatus(session) {
   const hasPrompt = Boolean(session.clean_champion_prompt || session.clean_challenger_prompt);
   const status = session.status;
 
-  // Circuit breaker dots
+  // Circuit breaker dots & counters
   els.iterationBadge.textContent = `${iter} / 3`;
+  if (els.archCbText) {
+    els.archCbText.textContent = `${iter} / 3 איטרציות`;
+  }
   const dots = els.cbDots.querySelectorAll(".cb-dot");
   dots.forEach((dot, idx) => {
     const stepNum = idx + 1;
@@ -457,7 +561,33 @@ function renderPipelineStatus(session) {
     }
   });
 
-  // Global status banner
+  // Header Telemetry Pill & Global status banner
+  const activeNodeId = activeStreamingNode || session.active_node;
+  if (els.telemetryLiveDot) {
+    els.telemetryLiveDot.className = "telemetry-live-dot";
+    if (activeNodeId || status === "compiling") {
+      els.telemetryLiveDot.classList.add("active");
+    } else if (status === "passed") {
+      els.telemetryLiveDot.classList.add("passed");
+    } else if (status === "escalated") {
+      els.telemetryLiveDot.classList.add("escalated");
+    }
+  }
+
+  if (els.headerActiveNodeText) {
+    if (activeNodeId && NODE_SHORT_LABELS[activeNodeId]) {
+      els.headerActiveNodeText.textContent = NODE_SHORT_LABELS[activeNodeId];
+    } else if (status === "passed") {
+      els.headerActiveNodeText.textContent = "Node 4 · Adjudicator (PASS)";
+    } else if (status === "escalated") {
+      els.headerActiveNodeText.textContent = "Node 3 · Upgrader Ready";
+    } else if (hasBlueprint) {
+      els.headerActiveNodeText.textContent = "Node 2 · The Construct";
+    } else {
+      els.headerActiveNodeText.textContent = "Node 1 · The Helper";
+    }
+  }
+
   els.globalStageBadge.className = "stage-indicator";
   if (status === "passed") {
     els.globalStageBadge.classList.add("status-passed");
@@ -466,7 +596,7 @@ function renderPipelineStatus(session) {
   } else if (status === "escalated") {
     els.globalStageBadge.classList.add("status-escalated");
     els.globalStageBadge.innerHTML = `הסלמה (<code class="tech-token" dir="ltr">ESCALATE</code>)`;
-    els.globalStageDesc.innerHTML = `מפסק הפחת הופעל. הזן הוראת תיקון ידנית בתיבת הצ'אט עבור <code class="tech-token" dir="ltr">The Upgrader</code>.`;
+    els.globalStageDesc.innerHTML = `מפסק הפחת הופעל. הזן הוראת תיקון ידנית עבור <code class="tech-token" dir="ltr">The Upgrader</code>.`;
   } else if (status === "compiling") {
     els.globalStageBadge.textContent = "הידור ובקרת איכות";
     els.globalStageDesc.innerHTML = `הסוכנים מהדרים ובודקים את הפרומפט מול <code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>...`;
@@ -478,7 +608,7 @@ function renderPipelineStatus(session) {
     els.globalStageDesc.textContent = "תאר את הבוט הרצוי כדי להתחיל את תהליך הייצור";
   }
 
-  // Update visual graph nodes
+  // Update visual graph nodes in view-pipeline
   const nodes = ["node_1_helper", "node_2_construct", "node_3_upgrader", "node_4_adjudicator"];
   nodes.forEach((nid) => {
     const el = document.getElementById(`graph-${nid}`);
@@ -486,7 +616,6 @@ function renderPipelineStatus(session) {
     if (!el || !badge) return;
     el.className = "agent-node";
 
-    const activeNodeId = activeStreamingNode || session.active_node;
     if (activeNodeId === nid) {
       el.classList.add("active");
       badge.textContent = "פעיל כעת...";
@@ -537,6 +666,13 @@ function renderPipelineStatus(session) {
 }
 
 function highlightActiveNode(nodeId, description) {
+  if (els.headerActiveNodeText && NODE_SHORT_LABELS[nodeId]) {
+    els.headerActiveNodeText.textContent = NODE_SHORT_LABELS[nodeId];
+  }
+  if (els.telemetryLiveDot) {
+    els.telemetryLiveDot.className = "telemetry-live-dot active";
+  }
+
   const nodes = ["node_1_helper", "node_2_construct", "node_3_upgrader", "node_4_adjudicator"];
   nodes.forEach((nid) => {
     const el = document.getElementById(`graph-${nid}`);
@@ -560,14 +696,14 @@ function renderInputMode(session) {
     (session.state && session.state.iteration_count > 0);
 
   if (isOverrideMode) {
-    els.inputModeBadge.innerHTML = `מצב עריכה ישירה (<code class="tech-token" dir="ltr">Upgrader</code>)`;
+    els.inputModeBadge.innerHTML = `<code class="tech-token" dir="ltr">Upgrader</code>`;
     els.inputModeBadge.classList.add("override-mode");
     els.overrideNotice.classList.remove("hidden");
     els.userInput.placeholder =
       "כתוב הנחיית שדרוג או תיקון עבור The Upgrader (למשל: 'הוסף חוק שאוסר על שימוש באימוג'ים')...";
     els.chatSubheader.innerHTML = `שליחת פקודות שדרוג אטומיות ישירות לסוכן העריכה (<code class="tech-token" dir="ltr">The Upgrader</code>)`;
   } else {
-    els.inputModeBadge.textContent = "מצב ראיון";
+    els.inputModeBadge.textContent = "ראיון";
     els.inputModeBadge.classList.remove("override-mode");
     els.overrideNotice.classList.add("hidden");
     els.userInput.placeholder =
@@ -629,7 +765,8 @@ function renderChatHistory(history) {
     els.chatMessages.appendChild(bubble);
   });
 
-  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  const scrollParent = els.chatMessages.closest(".chat-canvas-scroll") || els.chatMessages;
+  scrollParent.scrollTop = scrollParent.scrollHeight;
 }
 
 function appendOptimisticUserBubble(text) {
@@ -644,7 +781,8 @@ function appendOptimisticUserBubble(text) {
     <div class="bubble-text">${escapeHtml(text)}</div>
   `;
   els.chatMessages.appendChild(bubble);
-  els.chatMessages.scrollTop = els.chatMessages.scrollHeight;
+  const scrollParent = els.chatMessages.closest(".chat-canvas-scroll") || els.chatMessages;
+  scrollParent.scrollTop = scrollParent.scrollHeight;
 }
 
 function getBestPrompt(session) {
@@ -694,7 +832,7 @@ function renderPromptTab(session) {
           : activeNode === "node_3_upgrader"
           ? "The Upgrader"
           : "The Construct";
-      els.promptStatusPill.textContent = "בהידור...";
+      els.promptStatusPill.textContent = "בהידור";
       els.promptVersionTag.innerHTML = `<code class="tech-token" dir="ltr">${agentLabel}</code> פעיל`;
       els.promptVersionTag.className = "badge badge-warning";
       els.promptEmptyState.innerHTML = buildSkeletonHTML(
@@ -855,7 +993,6 @@ function computeLineDiff(oldText, newText) {
   const n = oldLines.length;
   const m = newLines.length;
 
-  // Guard for very large inputs: fallback to simple prefix/suffix + changed block
   if (n * m > 250000) {
     const out = [];
     const maxLen = Math.max(n, m);
@@ -926,22 +1063,40 @@ function renderUnifiedDiff(championText, challengerText) {
 }
 
 function renderTimelineTab(timeline) {
+  if (els.timelineCountPill) {
+    els.timelineCountPill.textContent = String((timeline || []).length);
+  }
+
   els.timelineList.innerHTML = "";
-  timeline
-    .slice()
-    .reverse()
-    .forEach((item) => {
-      const row = document.createElement("div");
-      row.className = "timeline-item";
-      row.innerHTML = `
-        <div class="tl-time">${escapeHtml(item.timestamp || "")}</div>
-        <div class="tl-body">
-          <div class="tl-title">${formatSimpleMarkdown(item.title || "")}</div>
-          <div class="tl-detail">${formatSimpleMarkdown(item.detail || "")}</div>
-        </div>
-      `;
-      els.timelineList.appendChild(row);
-    });
+  const reversed = (timeline || []).slice().reverse();
+  const filtered = timelineFilterQuery
+    ? reversed.filter((item) => {
+        const hay = `${item.title || ""} ${item.detail || ""} ${item.timestamp || ""}`.toLowerCase();
+        return hay.includes(timelineFilterQuery);
+      })
+    : reversed;
+
+  if (filtered.length === 0) {
+    els.timelineList.innerHTML = `
+      <div class="empty-state" style="min-height:140px;padding:16px;">
+        <p>${timelineFilterQuery ? "לא נמצאו אירועים התואמים לחיפוש." : "טרם נרשמו אירועים ביומן הסשן."}</p>
+      </div>
+    `;
+    return;
+  }
+
+  filtered.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "timeline-item";
+    row.innerHTML = `
+      <div class="tl-time">${escapeHtml(item.timestamp || "")}</div>
+      <div class="tl-body">
+        <div class="tl-title">${formatSimpleMarkdown(item.title || "")}</div>
+        <div class="tl-detail">${formatSimpleMarkdown(item.detail || "")}</div>
+      </div>
+    `;
+    els.timelineList.appendChild(row);
+  });
 }
 
 // ==========================================
@@ -1081,7 +1236,7 @@ function showToast(msg, iconKey = "check") {
 }
 
 // =========================================================
-// BETTY (בטי) — Dockable Slide-Over Drawer & Floating Assistant
+// BETTY (בטי) — Non-Overlapping Push Side-Panel & Floating Drawer
 // =========================================================
 let bettyMode = "tech_support"; // "tech_support" | "prompt_advisor"
 let bettyHistories = {
@@ -1132,17 +1287,19 @@ async function initBettyWidget() {
 
   renderBettyModeUI();
 
-  // Open / Close toggle
+  // Header Toggle Button opens/closes Betty Push Side-Panel
   fab.addEventListener("click", () => {
-    win.classList.remove("hidden");
-    fab.classList.add("hidden");
-    renderBettyMessages();
-    input.focus();
+    const isNowHidden = win.classList.toggle("hidden");
+    fab.classList.toggle("active", !isNowHidden);
+    if (!isNowHidden) {
+      renderBettyMessages();
+      input.focus();
+    }
   });
 
   closeBtn.addEventListener("click", () => {
     win.classList.add("hidden");
-    fab.classList.remove("hidden");
+    fab.classList.remove("active");
   });
 
   // Dock / Float Toggle Button
@@ -1158,8 +1315,8 @@ async function initBettyWidget() {
         win.style.height = "";
       } else {
         win.style.left = "24px";
-        win.style.top = "120px";
-        win.style.width = "440px";
+        win.style.top = "80px";
+        win.style.width = "420px";
         win.style.height = "560px";
       }
     });

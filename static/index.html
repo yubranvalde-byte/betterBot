@@ -7,15 +7,18 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.0" />
 </head>
 <body>
-  <!-- Top Navigation Header (56px) -->
+  <!-- ==========================================
+       TOP STUDIO BAR (56px)
+       ========================================== -->
   <header class="top-header">
+    <!-- Right (RTL): Brand Identity -->
     <div class="brand-area">
       <div class="logo-mark">
         <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="2" y="2" width="32" height="32" rx="8" fill="#151821" stroke="rgba(255,255,255,0.14)" stroke-width="1.5"/>
+          <rect x="2" y="2" width="32" height="32" rx="8" fill="#18181C" stroke="rgba(255,255,255,0.14)" stroke-width="1.5"/>
           <path d="M11 13L18 9L25 13V23L18 27L11 23V13Z" stroke="#6366F1" stroke-width="1.75" stroke-linejoin="round"/>
           <circle cx="18" cy="18" r="2.5" fill="#F3F4F6"/>
           <path d="M18 9V15.5M25 13L20.2 16.7M25 23L20.2 19.3M18 27V20.5M11 23L15.8 19.3M11 13L15.8 16.7" stroke="rgba(255,255,255,0.28)" stroke-width="1.25"/>
@@ -24,12 +27,31 @@
       <div class="brand-titles">
         <div class="brand-name-row">
           <h1>BetterBot</h1>
-          <span class="brand-tag">THE INTELLIGENCE FACTORY</span>
+          <span class="brand-tag">STUDIO</span>
         </div>
         <p class="brand-subtitle">סביבת הנדסת פרומפטים וארכיטקטורת סוכנים רב-שלבית</p>
       </div>
     </div>
 
+    <!-- Center: Compact Clickable Live Telemetry Pill (32px) -->
+    <button type="button" class="header-telemetry-pill" id="headerTelemetryPill" title="לחץ לפתיחת מפת הסוכנים ויומן הריצה">
+      <span class="telemetry-live-dot" id="telemetryLiveDot"></span>
+      <span class="stage-indicator" id="globalStageBadge">מוכן להפעלה</span>
+      <span class="telemetry-sep" aria-hidden="true"></span>
+      <span class="telemetry-node-label mono-text" id="headerActiveNodeText" dir="ltr">Node 1 · The Helper</span>
+      <span class="telemetry-sep" aria-hidden="true"></span>
+      <div class="circuit-breaker-meter" title="איטרציות בקרת איכות (Circuit Breaker)">
+        <span class="cb-label">QA</span>
+        <div class="cb-dots" id="cbDots">
+          <span class="cb-dot" data-idx="1"></span>
+          <span class="cb-dot" data-idx="2"></span>
+          <span class="cb-dot" data-idx="3"></span>
+        </div>
+        <span class="cb-count mono-text" id="iterationBadge">0 / 3</span>
+      </div>
+    </button>
+
+    <!-- Left (RTL): Session Controls & Betty Push-Panel Toggle -->
     <div class="header-controls">
       <div class="status-pill" id="modelBadge" title="מודל שפה פעיל">
         <span class="pulse-dot"></span>
@@ -46,381 +68,250 @@
           <span>סוכן חדש</span>
         </button>
       </div>
+
+      <button type="button" id="bettyFab" class="btn btn-secondary betty-header-toggle" title="פתח / סגור את בטי — יועצת AI ותמיכה טכנית">
+        <span class="betty-online-dot"></span>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 8V4H8"></path>
+          <rect width="16" height="12" x="4" y="8" rx="2"></rect>
+          <path d="M2 14h2"></path>
+          <path d="M20 14h2"></path>
+          <path d="M15 13v2"></path>
+          <path d="M9 13v2"></path>
+        </svg>
+        <span>בטי · <code class="tech-token" dir="ltr">AI Advisor</code></span>
+      </button>
     </div>
   </header>
 
-  <!-- Compact 48px Single-Row Telemetry Pipeline Strip -->
-  <section class="pipeline-banner" aria-label="מפת זרימת הסוכנים">
-    <div class="pipeline-status-info">
-      <span class="stage-indicator" id="globalStageBadge">מוכן להפעלה</span>
-      <span class="stage-description" id="globalStageDesc">ממתין לתיאור הסוכן הראשוני מהמשתמש</span>
-    </div>
-
-    <div class="pipeline-graph" dir="ltr">
-      <!-- Node 1: The Helper -->
-      <div class="agent-node" id="graph-node_1_helper" data-node="node_1_helper" title="Node 1: The Helper — ארכיטקט דרישות וראיון (לחץ למיקוד בתיבת הקלט)" role="button" tabindex="0">
-        <span class="node-num">1</span>
-        <div class="node-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
-        </div>
-        <div class="node-meta">
-          <div class="node-title">The Helper</div>
-          <div class="node-role">ארכיטקט דרישות וראיון</div>
-        </div>
-        <span class="node-status-dot" aria-hidden="true"></span>
-        <div class="node-state-badge" id="badge-node_1_helper">המתנה</div>
-      </div>
-
-      <!-- Connector 1 -> 2 -->
-      <div class="graph-connector" id="conn-1-2">
-        <div class="connector-line"></div>
-        <span class="connector-tag mono-text">&lt;GEM_BLUEPRINT&gt;</span>
-      </div>
-
-      <!-- Node 2: The Construct -->
-      <div class="agent-node" id="graph-node_2_construct" data-node="node_2_construct" title="Node 2: The Construct — מהדר הפרומפטים (לחץ למעבר לתוכנית האב)" role="button" tabindex="0">
-        <span class="node-num">2</span>
-        <div class="node-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 18 22 12 16 6"></polyline>
-            <polyline points="8 6 2 12 8 18"></polyline>
-          </svg>
-        </div>
-        <div class="node-meta">
-          <div class="node-title">The Construct</div>
-          <div class="node-role">מהדר הפרומפטים</div>
-        </div>
-        <span class="node-status-dot" aria-hidden="true"></span>
-        <div class="node-state-badge" id="badge-node_2_construct">המתנה</div>
-      </div>
-
-      <!-- Connector 2 -> 4 -->
-      <div class="graph-connector" id="conn-2-4">
-        <div class="connector-line"></div>
-        <span class="connector-tag mono-text">Challenger</span>
-      </div>
-
-      <!-- Node 4: The Adjudicator -->
-      <div class="agent-node" id="graph-node_4_adjudicator" data-node="node_4_adjudicator" title="Node 4: The Adjudicator — בקרת איכות ורגרסיה (לחץ למעבר ליומן QA)" role="button" tabindex="0">
-        <span class="node-num">4</span>
-        <div class="node-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            <polyline points="9 12 11 14 15 10"/>
-          </svg>
-        </div>
-        <div class="node-meta">
-          <div class="node-title">The Adjudicator</div>
-          <div class="node-role">בקרת איכות ורגרסיה</div>
-        </div>
-        <span class="node-status-dot" aria-hidden="true"></span>
-        <div class="node-state-badge" id="badge-node_4_adjudicator">המתנה</div>
-      </div>
-
-      <!-- Connector 4 <-> 3 -->
-      <div class="graph-connector loop-connector" id="conn-4-3">
-        <div class="connector-line"></div>
-        <span class="connector-tag mono-text">Hill Climbing</span>
-      </div>
-
-      <!-- Node 3: The Upgrader -->
-      <div class="agent-node" id="graph-node_3_upgrader" data-node="node_3_upgrader" title="Node 3: The Upgrader — עורך אטומי ומשדרג (לחץ למעבר לפרומפט המערכת)" role="button" tabindex="0">
-        <span class="node-num">3</span>
-        <div class="node-icon-wrap">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 20h9"/>
-            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
-          </svg>
-        </div>
-        <div class="node-meta">
-          <div class="node-title">The Upgrader</div>
-          <div class="node-role">עורך אטומי ומשדרג</div>
-        </div>
-        <span class="node-status-dot" aria-hidden="true"></span>
-        <div class="node-state-badge" id="badge-node_3_upgrader">המתנה</div>
-      </div>
-    </div>
-
-    <div class="circuit-breaker-meter">
-      <span class="cb-label">איטרציות <code class="tech-token" dir="ltr">Circuit Breaker</code>:</span>
-      <div class="cb-dots" id="cbDots">
-        <span class="cb-dot" data-idx="1"></span>
-        <span class="cb-dot" data-idx="2"></span>
-        <span class="cb-dot" data-idx="3"></span>
-      </div>
-      <span class="cb-count mono-text" id="iterationBadge">0 / 3</span>
-    </div>
-  </section>
-
-  <!-- Main Dual-Pane Workspace -->
-  <main class="workspace-grid">
-    <!-- RIGHT PANE: Interview & Agent Control Chat -->
-    <section class="panel chat-panel">
-      <div class="panel-header">
-        <div class="panel-title-group">
-          <span class="panel-icon" aria-hidden="true">
+  <!-- ==========================================
+       MAIN STUDIO BODY (calc(100vh - 56px))
+       ========================================== -->
+  <div class="studio-body">
+    <!-- RIGHT (RTL): Persistent Studio Navigation Rail (220px) -->
+    <aside class="studio-nav-rail" aria-label="ניווט חלונות עבודה">
+      <div class="nav-rail-section-label">חלונות עבודה</div>
+      <nav class="nav-rail-list" role="navigation">
+        <button type="button" class="nav-rail-btn active" data-view="view-interview">
+          <div class="nav-rail-btn-main">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
-          </span>
-          <div>
-            <h2>זירת האפיון והראיון</h2>
-            <p id="chatSubheader">שיחה אינטראקטיבית עם <code class="tech-token" dir="ltr">The Helper</code> לבניית תוכנית האב</p>
+            <span>זירת האפיון והראיון</span>
           </div>
-        </div>
-        <span class="mode-badge" id="inputModeBadge">מצב ראיון</span>
-      </div>
+          <span class="mode-badge" id="inputModeBadge">ראיון</span>
+        </button>
 
-      <!-- Quick Presets Banner (Shown when session is fresh) -->
-      <div class="presets-container" id="presetsContainer">
-        <div class="presets-label">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-          </svg>
-          <span>תבניות התחלה מהירה</span>
-        </div>
-        <div class="presets-grid">
-          <button type="button" class="preset-card" data-prompt="אני רוצה לבנות בוט שעוזר לכתוב ולנסח מיילים עסקיים באנגלית ברמה של מנהלים בכירים בהייטק, מנקודות קצרות בעברית.">
-            <span class="preset-icon" aria-hidden="true">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="4" width="20" height="16" rx="2"></rect>
-                <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
-              </svg>
-            </span>
-            <div class="preset-text">
-              <strong>ארכיטקט מיילים עסקיים</strong>
-              <span>ניסוח מיילים באנגלית עסקית מנקודות בעברית</span>
-            </div>
-            <span class="preset-arrow" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </span>
-          </button>
-
-          <button type="button" class="preset-card" data-prompt="אני רוצה לבנות מנטור קוד בפייתון ובדיקות תוכנה שעובר על קוד, מוצא באגים ובעיות ביצועים, ומסביר בצורה לימודית בלי לתת סתם קוד מוכן מראש.">
-            <span class="preset-icon" aria-hidden="true">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="16 18 22 12 16 6"></polyline>
-                <polyline points="8 6 2 12 8 18"></polyline>
-              </svg>
-            </span>
-            <div class="preset-text">
-              <strong>מנטור קוד ו-<code class="tech-token" dir="ltr">Code Review</code></strong>
-              <span>סוקר קוד פייתון ומדריך בלי לחלק פתרונות כפית</span>
-            </div>
-            <span class="preset-arrow" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </span>
-          </button>
-
-          <button type="button" class="preset-card" data-prompt="אני רוצה לבנות אנליסט אסטרטגי ומחקר שוק שמנתח רעיונות לסטארטאפים, בודק היתכנות עסקית, מזהה סיכונים ומציג ניתוח SWOT מובנה.">
-            <span class="preset-icon" aria-hidden="true">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="18" y1="20" x2="18" y2="10"></line>
-                <line x1="12" y1="20" x2="12" y2="4"></line>
-                <line x1="6" y1="20" x2="6" y2="14"></line>
-              </svg>
-            </span>
-            <div class="preset-text">
-              <strong>אנליסט אסטרטגיה וסטארטאפים</strong>
-              <span>בדיקת היתכנות עסקית, סיכונים וניתוח שוק</span>
-            </div>
-            <span class="preset-arrow" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </span>
-          </button>
-
-          <button type="button" class="preset-card" data-prompt="אני רוצה לבנות סוכן תמיכה טכנית אמפתי ומדויק לאפליקציית SaaS, שמאבחן תקלות צעד אחר צעד ומרגיע לקוחות מתוסכלים.">
-            <span class="preset-icon" aria-hidden="true">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
-                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
-              </svg>
-            </span>
-            <div class="preset-text">
-              <strong>מומחה תמיכה ושירות <code class="tech-token" dir="ltr">SaaS</code></strong>
-              <span>אבחון תקלות מובנה בשילוב אינטליגנציה רגשית</span>
-            </div>
-            <span class="preset-arrow" aria-hidden="true">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <line x1="7" y1="17" x2="17" y2="7"></line>
-                <polyline points="7 7 17 7 17 17"></polyline>
-              </svg>
-            </span>
-          </button>
-        </div>
-      </div>
-
-      <!-- Chat Messages Scroll Area -->
-      <div class="chat-messages" id="chatMessages"></div>
-
-      <!-- Live Thinking / Active Agent Banner -->
-      <div class="active-execution-bar hidden" id="activeExecutionBar">
-        <div class="spinner-ring"></div>
-        <div class="exec-texts">
-          <strong id="execNodeTitle">Node 1: The Helper</strong>
-          <span id="execNodeDesc">מעבד נתונים...</span>
-        </div>
-      </div>
-
-      <!-- Chat / Override Input Form -->
-      <form class="chat-input-area" id="chatForm">
-        <div class="override-banner hidden" id="overrideNotice">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-          </svg>
-          <span><strong>מצב הנחיה ישירה ל-<code class="tech-token" dir="ltr">Upgrader</code>:</strong> כל הוראה שתכתוב כאן תועבר לעריכה אטומית של ה-<code class="tech-token" dir="ltr">XML</code> והפרומפט ותיבדק מחדש ב-<code class="tech-token" dir="ltr">QA</code>.</span>
-        </div>
-        <div class="input-row">
-          <textarea
-            id="userInput"
-            rows="2"
-            placeholder="תאר את הבוט שאתה רוצה לבנות או ענה לשאלות הארכיטקט... (Enter לשליחה, Shift+Enter לשורה חדשה)"
-            required
-          ></textarea>
-          <button type="submit" id="sendBtn" class="btn btn-send" title="שלח הודעה">
-            <span>שלח</span>
+        <button type="button" class="nav-rail-btn" data-view="view-artifacts">
+          <div class="nav-rail-btn-main">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="22" y1="2" x2="11" y2="13"></line>
-              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
             </svg>
-          </button>
-        </div>
-      </form>
-    </section>
+            <span>מעבדת הפרומפט וה-XML</span>
+          </div>
+          <span class="tab-pill" id="promptStatusPill">ריק</span>
+        </button>
 
-    <!-- LEFT PANE: Artifacts, XML Blueprint, QA & Live Logs -->
-    <section class="panel artifacts-panel">
-      <div class="tabs-header" role="tablist" aria-label="תוצרי המערכת">
-        <button class="tab-btn active" role="tab" aria-selected="true" aria-controls="promptTab" data-tab="promptTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="10"></circle>
-            <circle cx="12" cy="12" r="6"></circle>
-            <circle cx="12" cy="12" r="2"></circle>
-          </svg>
-          <span>פרומפט המערכת</span>
-          <span class="tab-pill" id="promptStatusPill">טיוטה</span>
-        </button>
-        <button class="tab-btn" role="tab" aria-selected="false" aria-controls="blueprintTab" data-tab="blueprintTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
-            <rect x="9" y="9" width="6" height="6"></rect>
-            <line x1="9" y1="1" x2="9" y2="4"></line>
-            <line x1="15" y1="1" x2="15" y2="4"></line>
-            <line x1="9" y1="20" x2="9" y2="23"></line>
-            <line x1="15" y1="20" x2="15" y2="23"></line>
-            <line x1="20" y1="9" x2="23" y2="9"></line>
-            <line x1="20" y1="14" x2="23" y2="14"></line>
-            <line x1="1" y1="9" x2="4" y2="9"></line>
-            <line x1="1" y1="14" x2="4" y2="14"></line>
-          </svg>
-          <span><code class="tech-token" dir="ltr">XML Blueprint</code></span>
-        </button>
-        <button class="tab-btn" role="tab" aria-selected="false" aria-controls="qaTab" data-tab="qaTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            <polyline points="9 12 11 14 15 10"></polyline>
-          </svg>
-          <span>בקרת איכות (<code class="tech-token" dir="ltr">QA</code>)</span>
+        <button type="button" class="nav-rail-btn" data-view="view-qa">
+          <div class="nav-rail-btn-main">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+            <span>בקרת איכות ו-Diff</span>
+          </div>
           <span class="tab-pill" id="qaCountPill">0</span>
         </button>
-        <button class="tab-btn" role="tab" aria-selected="false" aria-controls="timelineTab" data-tab="timelineTab">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
-          </svg>
-          <span>יומן ריצה חי</span>
+
+        <button type="button" class="nav-rail-btn" data-view="view-pipeline">
+          <div class="nav-rail-btn-main">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+            </svg>
+            <span>מפת הסוכנים וטלמטריה</span>
+          </div>
+          <span class="tab-pill mono-text" id="timelineCountPill">0</span>
         </button>
-      </div>
+      </nav>
 
-      <!-- TAB 1: System Prompt Output -->
-      <div class="tab-content active" id="promptTab" role="tabpanel">
-        <div class="artifact-toolbar">
-          <div class="artifact-stats">
-            <span id="promptVersionTag" class="badge badge-neutral">ממתין להידור</span>
-            <span id="promptStatsText" class="mono-text stat-muted">0 תווים · ~0 טוקנים</span>
-          </div>
-          <div class="artifact-actions">
-            <button id="toggleRawPromptBtn" class="btn btn-ghost btn-sm" title="החלף תצוגה">תצוגת קוד גולמי</button>
-            <button id="copyPromptBtn" class="btn btn-secondary btn-sm" disabled>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              <span>העתק פרומפט</span>
-            </button>
-            <button id="downloadPromptBtn" class="btn btn-primary btn-sm" disabled>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              <span>הורד .MD</span>
-            </button>
-          </div>
+      <div class="nav-rail-footer">
+        <div class="nav-stage-box">
+          <div class="nav-stage-title">סטטוס שלב פעיל</div>
+          <p class="stage-description" id="globalStageDesc">ממתין לתיאור הסוכן הראשוני מהמשתמש</p>
         </div>
+      </div>
+    </aside>
 
-        <div class="artifact-body" id="promptViewerArea">
-          <div class="empty-state" id="promptEmptyState">
-            <div class="empty-illustration">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-                <polyline points="2 17 12 22 22 17"></polyline>
-                <polyline points="2 12 12 17 22 12"></polyline>
-              </svg>
-            </div>
-            <h3>פרומפט המערכת יופיע כאן</h3>
-            <p>לאחר סיום הראיון הקצר עם <code class="tech-token" dir="ltr">The Helper</code>, המהדר (<code class="tech-token" dir="ltr">The Construct</code>) יבנה כאן את פרומפט המערכת המלא ויעביר אותו בדיקות <code class="tech-token" dir="ltr">QA</code> אוטומטיות.</p>
-          </div>
-
-          <div id="promptDisplayContainer" class="hidden">
-            <details class="comp-check-box hidden" id="compilationCheckBox">
-              <summary>
+    <!-- CENTER: Active Full-Height Studio Viewport -->
+    <main class="studio-viewport">
+      <!-- ==========================================
+           WINDOW 1: view-interview (Spacious Centered Chat Studio)
+           ========================================== -->
+      <section class="studio-view active" id="view-interview" aria-label="זירת האפיון והראיון">
+        <div class="interview-column">
+          <div class="interview-header">
+            <div class="panel-title-group">
+              <span class="panel-icon" aria-hidden="true">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <circle cx="11" cy="11" r="8"></circle>
-                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                 </svg>
-                <span>בדיקת אימות עצמית של המהדר (<code class="tech-token" dir="ltr">&lt;compilation_check&gt;</code>)</span>
-              </summary>
-              <pre id="compilationCheckContent" dir="ltr" class="mono-block"></pre>
-            </details>
-            <div id="promptFormattedView" dir="ltr" class="markdown-body"></div>
-            <pre id="promptRawView" dir="ltr" class="code-viewer hidden"></pre>
+              </span>
+              <div>
+                <h2>זירת האפיון והראיון</h2>
+                <p id="chatSubheader">שיחה אינטראקטיבית עם <code class="tech-token" dir="ltr">The Helper</code> לבניית תוכנית האב</p>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <!-- TAB 2: XML Blueprint -->
-      <div class="tab-content" id="blueprintTab" role="tabpanel">
-        <div class="artifact-toolbar">
-          <div class="artifact-stats">
-            <span class="badge badge-info"><code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code></span>
-            <span id="bpVersionText" class="mono-text stat-muted">V1.0</span>
+          <!-- Full-Height Scrollable Conversation Area (Presets + Messages) -->
+          <div class="chat-canvas-scroll">
+            <!-- Quick Presets Welcome Hero (Hidden automatically once first user message is sent) -->
+            <div class="presets-container" id="presetsContainer">
+              <div class="presets-label">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                </svg>
+                <span>תבניות התחלה מהירה</span>
+              </div>
+              <div class="presets-grid">
+                <button type="button" class="preset-card" data-prompt="אני רוצה לבנות בוט שעוזר לכתוב ולנסח מיילים עסקיים באנגלית ברמה של מנהלים בכירים בהייטק, מנקודות קצרות בעברית.">
+                  <span class="preset-icon" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path>
+                    </svg>
+                  </span>
+                  <div class="preset-text">
+                    <strong>ארכיטקט מיילים עסקיים</strong>
+                    <span>ניסוח מיילים באנגלית עסקית מנקודות בעברית</span>
+                  </div>
+                  <span class="preset-arrow" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="7" y1="17" x2="17" y2="7"></line>
+                      <polyline points="7 7 17 7 17 17"></polyline>
+                    </svg>
+                  </span>
+                </button>
+
+                <button type="button" class="preset-card" data-prompt="אני רוצה לבנות מנטור קוד בפייתון ובדיקות תוכנה שעובר על קוד, מוצא באגים ובעיות ביצועים, ומסביר בצורה לימודית בלי לתת סתם קוד מוכן מראש.">
+                  <span class="preset-icon" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="16 18 22 12 16 6"></polyline>
+                      <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                  </span>
+                  <div class="preset-text">
+                    <strong>מנטור קוד ו-<code class="tech-token" dir="ltr">Code Review</code></strong>
+                    <span>סוקר קוד פייתון ומדריך בלי לחלק פתרונות כפית</span>
+                  </div>
+                  <span class="preset-arrow" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="7" y1="17" x2="17" y2="7"></line>
+                      <polyline points="7 7 17 7 17 17"></polyline>
+                    </svg>
+                  </span>
+                </button>
+
+                <button type="button" class="preset-card" data-prompt="אני רוצה לבנות אנליסט אסטרטגי ומחקר שוק שמנתח רעיונות לסטארטאפים, בודק היתכנות עסקית, מזהה סיכונים ומציג ניתוח SWOT מובנה.">
+                  <span class="preset-icon" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="18" y1="20" x2="18" y2="10"></line>
+                      <line x1="12" y1="20" x2="12" y2="4"></line>
+                      <line x1="6" y1="20" x2="6" y2="14"></line>
+                    </svg>
+                  </span>
+                  <div class="preset-text">
+                    <strong>אנליסט אסטרטגיה וסטארטאפים</strong>
+                    <span>בדיקת היתכנות עסקית, סיכונים וניתוח שוק</span>
+                  </div>
+                  <span class="preset-arrow" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="7" y1="17" x2="17" y2="7"></line>
+                      <polyline points="7 7 17 7 17 17"></polyline>
+                    </svg>
+                  </span>
+                </button>
+
+                <button type="button" class="preset-card" data-prompt="אני רוצה לבנות סוכן תמיכה טכנית אמפתי ומדויק לאפליקציית SaaS, שמאבחן תקלות צעד אחר צעד ומרגיע לקוחות מתוסכלים.">
+                  <span class="preset-icon" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                      <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                    </svg>
+                  </span>
+                  <div class="preset-text">
+                    <strong>מומחה תמיכה ושירות <code class="tech-token" dir="ltr">SaaS</code></strong>
+                    <span>אבחון תקלות מובנה בשילוב אינטליגנציה רגשית</span>
+                  </div>
+                  <span class="preset-arrow" aria-hidden="true">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <line x1="7" y1="17" x2="17" y2="7"></line>
+                      <polyline points="7 7 17 7 17 17"></polyline>
+                    </svg>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Chat Messages Stream -->
+            <div class="chat-messages" id="chatMessages"></div>
           </div>
-          <div class="artifact-actions">
-            <button id="copyXmlBtn" class="btn btn-secondary btn-sm" disabled>
+
+          <!-- Live Thinking / Active Agent Banner -->
+          <div class="active-execution-bar hidden" id="activeExecutionBar">
+            <div class="spinner-ring"></div>
+            <div class="exec-texts">
+              <strong id="execNodeTitle">Node 1: The Helper</strong>
+              <span id="execNodeDesc">מעבד נתונים...</span>
+            </div>
+          </div>
+
+          <!-- Chat / Override Input Form -->
+          <form class="chat-input-area" id="chatForm">
+            <div class="override-banner hidden" id="overrideNotice">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
               </svg>
-              <span>העתק XML</span>
-            </button>
-          </div>
+              <span><strong>מצב הנחיה ישירה ל-<code class="tech-token" dir="ltr">Upgrader</code>:</strong> כל הוראה שתכתוב כאן תועבר לעריכה אטומית של ה-<code class="tech-token" dir="ltr">XML</code> והפרומפט ותיבדק מחדש ב-<code class="tech-token" dir="ltr">QA</code>.</span>
+            </div>
+            <div class="input-row">
+              <textarea
+                id="userInput"
+                rows="2"
+                placeholder="תאר את הבוט שאתה רוצה לבנות או ענה לשאלות הארכיטקט... (Enter לשליחה, Shift+Enter לשורה חדשה)"
+                required
+              ></textarea>
+              <button type="submit" id="sendBtn" class="btn btn-send" title="שלח הודעה">
+                <span>שלח</span>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13"></line>
+                  <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                </svg>
+              </button>
+            </div>
+          </form>
         </div>
+      </section>
 
-        <div class="artifact-body">
-          <div class="empty-state" id="blueprintEmptyState">
-            <div class="empty-illustration">
-              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <!-- ==========================================
+           WINDOW 2: view-artifacts (Prompt & XML Blueprint IDE Studio)
+           ========================================== -->
+      <section class="studio-view" id="view-artifacts" aria-label="מעבדת הפרומפט וה-XML">
+        <!-- Sub-Header IDE Bar: Segmented Switcher on Right, Contextual Actions on Left -->
+        <div class="ide-header-bar">
+          <div class="tabs-header" role="tablist" aria-label="תוצרי המערכת">
+            <button type="button" class="tab-btn active" role="tab" aria-selected="true" aria-controls="promptTab" data-tab="promptTab">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <circle cx="12" cy="12" r="6"></circle>
+                <circle cx="12" cy="12" r="2"></circle>
+              </svg>
+              <span>פרומפט המערכת</span>
+            </button>
+            <button type="button" class="tab-btn" role="tab" aria-selected="false" aria-controls="blueprintTab" data-tab="blueprintTab">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
                 <rect x="9" y="9" width="6" height="6"></rect>
                 <line x1="9" y1="1" x2="9" y2="4"></line>
@@ -432,31 +323,162 @@
                 <line x1="1" y1="9" x2="4" y2="9"></line>
                 <line x1="1" y1="14" x2="4" y2="14"></line>
               </svg>
-            </div>
-            <h3>תוכנית האב (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>) טרם הופקה</h3>
-            <p>השלם את שאלות המיקוד בראיון עם <code class="tech-token" dir="ltr">The Helper</code> כדי לחלץ את המודולים הקוגניטיביים וחוקי הפעולה.</p>
+              <span><code class="tech-token" dir="ltr">XML Blueprint</code></span>
+            </button>
           </div>
 
-          <div id="blueprintContainer" class="hidden">
-            <div class="bp-cards-grid" id="bpCardsGrid"></div>
-            <div class="xml-code-section">
-              <div class="section-caption">קוד <code class="tech-token" dir="ltr">XML</code> מלא (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>):</div>
-              <pre id="xmlRawViewer" dir="ltr" class="code-viewer xml-viewer"></pre>
+          <div class="ide-toolbar-left">
+            <!-- Prompt Toolbar Group -->
+            <div class="artifact-toolbar" id="promptToolbarGroup">
+              <div class="artifact-stats">
+                <span id="promptVersionTag" class="badge badge-neutral">ממתין להידור</span>
+                <span id="promptStatsText" class="mono-text stat-muted">0 תווים · ~0 טוקנים</span>
+              </div>
+              <div class="artifact-actions">
+                <button type="button" id="toggleRawPromptBtn" class="btn btn-ghost btn-sm" title="החלף תצוגה">תצוגת קוד גולמי</button>
+                <button type="button" id="copyPromptBtn" class="btn btn-secondary btn-sm" disabled>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>העתק פרומפט</span>
+                </button>
+                <button type="button" id="downloadPromptBtn" class="btn btn-primary btn-sm" disabled>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>הורד .MD</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Blueprint Toolbar Group -->
+            <div class="artifact-toolbar hidden" id="blueprintToolbarGroup">
+              <div class="artifact-stats">
+                <span class="badge badge-info"><code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code></span>
+                <span id="bpVersionText" class="mono-text stat-muted">V1.0</span>
+              </div>
+              <div class="artifact-actions">
+                <button type="button" id="copyXmlBtn" class="btn btn-secondary btn-sm" disabled>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                  <span>העתק XML</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- TAB 3: QA & Champion vs Challenger -->
-      <div class="tab-content" id="qaTab" role="tabpanel">
-        <div class="artifact-body">
-          <div class="qa-summary-header">
-            <div>
-              <h3>יומן ביקורת איכות ו-<code class="tech-token" dir="ltr">Hill Climbing</code></h3>
-              <p>מעקב אחר החלטות ה-<code class="tech-token" dir="ltr">Adjudicator</code> (<code class="tech-token" dir="ltr">Baseline &amp; Regression QA</code>) והשוואת גרסאות</p>
+        <!-- TAB 1: System Prompt Output -->
+        <div class="tab-content active" id="promptTab" role="tabpanel">
+          <div class="artifact-body" id="promptViewerArea">
+            <div class="empty-state" id="promptEmptyState">
+              <div class="empty-illustration">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                  <polyline points="2 17 12 22 22 17"></polyline>
+                  <polyline points="2 12 12 17 22 12"></polyline>
+                </svg>
+              </div>
+              <h3>פרומפט המערכת יופיע כאן</h3>
+              <p>לאחר סיום הראיון הקצר עם <code class="tech-token" dir="ltr">The Helper</code>, המהדר (<code class="tech-token" dir="ltr">The Construct</code>) יבנה כאן את פרומפט המערכת המלא ויעביר אותו בדיקות <code class="tech-token" dir="ltr">QA</code> אוטומטיות.</p>
+            </div>
+
+            <div id="promptDisplayContainer" class="hidden">
+              <details class="comp-check-box hidden" id="compilationCheckBox">
+                <summary>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg>
+                  <span>בדיקת אימות עצמית של המהדר (<code class="tech-token" dir="ltr">&lt;compilation_check&gt;</code>)</span>
+                </summary>
+                <pre id="compilationCheckContent" dir="ltr" class="mono-block"></pre>
+              </details>
+              <div id="promptFormattedView" dir="ltr" class="markdown-body"></div>
+              <pre id="promptRawView" dir="ltr" class="code-viewer hidden"></pre>
             </div>
           </div>
+        </div>
 
+        <!-- TAB 2: XML Blueprint -->
+        <div class="tab-content" id="blueprintTab" role="tabpanel">
+          <div class="artifact-body">
+            <div class="empty-state" id="blueprintEmptyState">
+              <div class="empty-illustration">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect>
+                  <rect x="9" y="9" width="6" height="6"></rect>
+                  <line x1="9" y1="1" x2="9" y2="4"></line>
+                  <line x1="15" y1="1" x2="15" y2="4"></line>
+                  <line x1="9" y1="20" x2="9" y2="23"></line>
+                  <line x1="15" y1="20" x2="15" y2="23"></line>
+                  <line x1="20" y1="9" x2="23" y2="9"></line>
+                  <line x1="20" y1="14" x2="23" y2="14"></line>
+                  <line x1="1" y1="9" x2="4" y2="9"></line>
+                  <line x1="1" y1="14" x2="4" y2="14"></line>
+                </svg>
+              </div>
+              <h3>תוכנית האב (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>) טרם הופקה</h3>
+              <p>השלם את שאלות המיקוד בראיון עם <code class="tech-token" dir="ltr">The Helper</code> כדי לחלץ את המודולים הקוגניטיביים וחוקי הפעולה.</p>
+            </div>
+
+            <div id="blueprintContainer" class="hidden">
+              <div class="bp-cards-grid" id="bpCardsGrid"></div>
+              <div class="xml-code-section">
+                <div class="section-caption">קוד <code class="tech-token" dir="ltr">XML</code> מלא (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>):</div>
+                <pre id="xmlRawViewer" dir="ltr" class="code-viewer xml-viewer"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Quick Upgrader Command Bar (Inline Atomic Modification from IDE View) -->
+        <form class="quick-upgrader-bar" id="artifactUpgraderForm">
+          <div class="quick-upgrader-label">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9"></path>
+              <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+            </svg>
+            <span>פקודת שדרוג מהירה (<code class="tech-token" dir="ltr">The Upgrader</code>):</span>
+          </div>
+          <input
+            type="text"
+            id="artifactUpgraderInput"
+            class="quick-upgrader-input"
+            placeholder="שלח הוראת עריכה אטומית ישירות מכאן (למשל: 'הוסף טבלת השוואה לפלט והקשח אילוצים')..."
+          />
+          <button type="submit" id="artifactUpgraderSendBtn" class="btn btn-primary btn-sm">
+            <span>שדרג ובדוק ב-QA</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </form>
+      </section>
+
+      <!-- ==========================================
+           WINDOW 3: view-qa (Full-Screen QA & Champion vs. Challenger Diff Lab)
+           ========================================== -->
+      <section class="studio-view" id="view-qa" aria-label="בקרת איכות ו-Diff">
+        <div class="qa-studio-header">
+          <div class="qa-summary-header">
+            <h3>מעבדת בקרת איכות (<code class="tech-token" dir="ltr">Adjudicator QA</code>) ו-<code class="tech-token" dir="ltr">Hill Climbing Diff</code></h3>
+            <p>מעקב אחר החלטות ה-<code class="tech-token" dir="ltr">Adjudicator</code> (<code class="tech-token" dir="ltr">Baseline &amp; Regression QA</code>) והשוואת גרסאות ברוחב מלא</p>
+          </div>
+          <div class="diff-view-toggle" role="group" aria-label="מצב תצוגת השוואה">
+            <button type="button" class="diff-mode-btn active" data-diff-mode="unified">Unified Diff</button>
+            <button type="button" class="diff-mode-btn" data-diff-mode="split">Side-by-Side</button>
+          </div>
+        </div>
+
+        <div class="artifact-body qa-studio-body" id="qaTab">
+          <!-- Top Strip: Adjudicator QA Verdicts -->
           <div id="qaLogsList" class="qa-logs-list">
             <div class="empty-state">
               <div class="empty-illustration">
@@ -470,13 +492,10 @@
             </div>
           </div>
 
+          <!-- Main Full-Width Diff Lab -->
           <div id="diffComparisonSection" class="diff-section hidden">
             <div class="diff-section-header">
               <h4>השוואת <code class="tech-token" dir="ltr">Champion</code> (מאושר) מול <code class="tech-token" dir="ltr">Challenger</code> (מועמד אחרון)</h4>
-              <div class="diff-view-toggle" role="group" aria-label="מצב תצוגת השוואה">
-                <button type="button" class="diff-mode-btn active" data-diff-mode="unified">Unified Diff</button>
-                <button type="button" class="diff-mode-btn" data-diff-mode="split">Side-by-Side</button>
-              </div>
             </div>
 
             <!-- Unified Diff Viewer (Default) -->
@@ -512,158 +531,275 @@
             </div>
           </div>
         </div>
-      </div>
+      </section>
 
-      <!-- TAB 4: Live Factory Timeline -->
-      <div class="tab-content" id="timelineTab" role="tabpanel">
-        <div class="artifact-body">
-          <div class="timeline-list" id="timelineList"></div>
-        </div>
-      </div>
-    </section>
-  </main>
+      <!-- ==========================================
+           WINDOW 4: view-pipeline (Visual LangGraph Architecture & Live Timeline)
+           ========================================== -->
+      <section class="studio-view" id="view-pipeline" aria-label="מפת הסוכנים וטלמטריה">
+        <div class="artifact-body pipeline-studio-body" id="timelineTab">
+          <!-- Top Half: Spacious Interactive 4-Agent LangGraph Architecture Diagram -->
+          <div class="pipeline-architecture-card">
+            <div class="pipeline-arch-header">
+              <div>
+                <h3>ארכיטקטורת סוכנים חיה (<code class="tech-token" dir="ltr">LangGraph StateGraph</code>)</h3>
+                <p>לחץ על כל סוכן כדי לנווט ישירות לחלון העבודה הייעודי שלו</p>
+              </div>
+              <div class="arch-cb-summary">
+                <span>מצב <code class="tech-token" dir="ltr">Circuit Breaker</code>:</span>
+                <span class="mono-text" id="archCbText">0 / 3 איטרציות</span>
+              </div>
+            </div>
 
-  <!-- ==========================================
-       BETTY (בטי) — Floating Trigger & Dockable Slide-Over / Floating Drawer
-       ========================================== -->
-  <button id="bettyFab" class="betty-fab" title="שאל את בטי — העוזרת והיועצת של BetterBot">
-    <div class="betty-fab-avatar">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 8V4H8"></path>
-        <rect width="16" height="12" x="4" y="8" rx="2"></rect>
-        <path d="M2 14h2"></path>
-        <path d="M20 14h2"></path>
-        <path d="M15 13v2"></path>
-        <path d="M9 13v2"></path>
-      </svg>
-      <span class="betty-online-dot"></span>
-    </div>
-    <div class="betty-fab-label">
-      <strong>בטי (Betty)</strong>
-      <span>עוזרת ויועצת AI</span>
-    </div>
-  </button>
+            <div class="pipeline-graph" dir="ltr">
+              <!-- Node 1: The Helper -->
+              <div class="agent-node" id="graph-node_1_helper" data-node="node_1_helper" title="לחץ למעבר לזירת האפיון והראיון" role="button" tabindex="0">
+                <div class="node-card-top">
+                  <span class="node-num">Node 1</span>
+                  <span class="node-status-dot" aria-hidden="true"></span>
+                </div>
+                <div class="node-card-main">
+                  <div class="node-icon-wrap">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                    </svg>
+                  </div>
+                  <div class="node-meta">
+                    <div class="node-title">The Helper</div>
+                    <div class="node-role" dir="rtl">ארכיטקט דרישות וראיון</div>
+                  </div>
+                </div>
+                <div class="node-state-badge" id="badge-node_1_helper" dir="rtl">המתנה</div>
+              </div>
 
-  <aside id="bettyWindow" class="betty-window docked hidden" aria-label="חלון הצ'אט של בטי">
-    <!-- 8-Direction Resize Handles (active when floating) -->
-    <div class="betty-resize-handle handle-nw" data-resize="nw" title="שנה גודל"></div>
-    <div class="betty-resize-handle handle-ne" data-resize="ne" title="שנה גודל"></div>
-    <div class="betty-resize-handle handle-sw" data-resize="sw" title="שנה גודל"></div>
-    <div class="betty-resize-handle handle-se" data-resize="se" title="שנה גודל"></div>
-    <div class="betty-resize-handle handle-n" data-resize="n"></div>
-    <div class="betty-resize-handle handle-s" data-resize="s"></div>
-    <div class="betty-resize-handle handle-e" data-resize="e"></div>
-    <div class="betty-resize-handle handle-w" data-resize="w"></div>
+              <!-- Connector 1 -> 2 -->
+              <div class="graph-connector" id="conn-1-2">
+                <div class="connector-line"></div>
+                <span class="connector-tag mono-text">&lt;GEM_BLUEPRINT&gt;</span>
+              </div>
 
-    <!-- Title Bar -->
-    <div class="betty-header" id="bettyDragHeader">
-      <div class="betty-header-right">
-        <span class="betty-drag-grip" title="גרור חלון (במצב צף)" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="9" cy="5" r="1"></circle>
-            <circle cx="9" cy="12" r="1"></circle>
-            <circle cx="9" cy="19" r="1"></circle>
-            <circle cx="15" cy="5" r="1"></circle>
-            <circle cx="15" cy="12" r="1"></circle>
-            <circle cx="15" cy="19" r="1"></circle>
-          </svg>
-        </span>
-        <div class="betty-mini-avatar" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 8V4H8"></path>
-            <rect width="16" height="12" x="4" y="8" rx="2"></rect>
-            <path d="M2 14h2"></path>
-            <path d="M20 14h2"></path>
-            <path d="M15 13v2"></path>
-            <path d="M9 13v2"></path>
-          </svg>
-        </div>
-        <div class="betty-header-titles">
-          <div class="betty-title-row">
-            <strong>בטי (Betty)</strong>
+              <!-- Node 2: The Construct -->
+              <div class="agent-node" id="graph-node_2_construct" data-node="node_2_construct" title="לחץ למעבר לתוכנית האב (XML Blueprint)" role="button" tabindex="0">
+                <div class="node-card-top">
+                  <span class="node-num">Node 2</span>
+                  <span class="node-status-dot" aria-hidden="true"></span>
+                </div>
+                <div class="node-card-main">
+                  <div class="node-icon-wrap">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="16 18 22 12 16 6"></polyline>
+                      <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                  </div>
+                  <div class="node-meta">
+                    <div class="node-title">The Construct</div>
+                    <div class="node-role" dir="rtl">מהדר הפרומפטים</div>
+                  </div>
+                </div>
+                <div class="node-state-badge" id="badge-node_2_construct" dir="rtl">המתנה</div>
+              </div>
+
+              <!-- Connector 2 -> 4 -->
+              <div class="graph-connector" id="conn-2-4">
+                <div class="connector-line"></div>
+                <span class="connector-tag mono-text">Challenger</span>
+              </div>
+
+              <!-- Node 4: The Adjudicator -->
+              <div class="agent-node" id="graph-node_4_adjudicator" data-node="node_4_adjudicator" title="לחץ למעבר למעבדת בקרת איכות ו-Diff" role="button" tabindex="0">
+                <div class="node-card-top">
+                  <span class="node-num">Node 4</span>
+                  <span class="node-status-dot" aria-hidden="true"></span>
+                </div>
+                <div class="node-card-main">
+                  <div class="node-icon-wrap">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+                      <polyline points="9 12 11 14 15 10"/>
+                    </svg>
+                  </div>
+                  <div class="node-meta">
+                    <div class="node-title">The Adjudicator</div>
+                    <div class="node-role" dir="rtl">בקרת איכות ורגרסיה</div>
+                  </div>
+                </div>
+                <div class="node-state-badge" id="badge-node_4_adjudicator" dir="rtl">המתנה</div>
+              </div>
+
+              <!-- Connector 4 <-> 3 -->
+              <div class="graph-connector loop-connector" id="conn-4-3">
+                <div class="connector-line"></div>
+                <span class="connector-tag mono-text">Hill Climbing</span>
+              </div>
+
+              <!-- Node 3: The Upgrader -->
+              <div class="agent-node" id="graph-node_3_upgrader" data-node="node_3_upgrader" title="לחץ למעבר למעבדת הפרומפט" role="button" tabindex="0">
+                <div class="node-card-top">
+                  <span class="node-num">Node 3</span>
+                  <span class="node-status-dot" aria-hidden="true"></span>
+                </div>
+                <div class="node-card-main">
+                  <div class="node-icon-wrap">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M12 20h9"/>
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                    </svg>
+                  </div>
+                  <div class="node-meta">
+                    <div class="node-title">The Upgrader</div>
+                    <div class="node-role" dir="rtl">עורך אטומי ומשדרג</div>
+                  </div>
+                </div>
+                <div class="node-state-badge" id="badge-node_3_upgrader" dir="rtl">המתנה</div>
+              </div>
+            </div>
           </div>
-          <span id="bettySubStatus">מומחית המערכת ויועצת הנדסת פרומפטים</span>
+
+          <!-- Bottom Half: Full-Width Searchable Live Execution Timeline -->
+          <div class="pipeline-timeline-card">
+            <div class="pipeline-timeline-header">
+              <div>
+                <h3>יומן ריצה וטלמטריה חי</h3>
+                <p>תיעוד כרונולוגי של כלל מעברי הסוכנים, ההידורים ובדיקות ה-<code class="tech-token" dir="ltr">QA</code> בסשן</p>
+              </div>
+              <div class="timeline-search-wrap">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="11" cy="11" r="8"></circle>
+                  <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="search" id="timelineSearchInput" class="timeline-search-input" placeholder="סנן אירועים ביומן..." />
+              </div>
+            </div>
+            <div class="timeline-list" id="timelineList"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ==========================================
+         LEFT (RTL): BETTY PUSH SIDE-PANEL / FLOATING DRAWER
+         ========================================== -->
+    <aside id="bettyWindow" class="betty-window docked hidden" aria-label="חלון הצ'אט של בטי">
+      <!-- 8-Direction Resize Handles (active when floating) -->
+      <div class="betty-resize-handle handle-nw" data-resize="nw" title="שנה גודל"></div>
+      <div class="betty-resize-handle handle-ne" data-resize="ne" title="שנה גודל"></div>
+      <div class="betty-resize-handle handle-sw" data-resize="sw" title="שנה גודל"></div>
+      <div class="betty-resize-handle handle-se" data-resize="se" title="שנה גודל"></div>
+      <div class="betty-resize-handle handle-n" data-resize="n"></div>
+      <div class="betty-resize-handle handle-s" data-resize="s"></div>
+      <div class="betty-resize-handle handle-e" data-resize="e"></div>
+      <div class="betty-resize-handle handle-w" data-resize="w"></div>
+
+      <!-- Title Bar -->
+      <div class="betty-header" id="bettyDragHeader">
+        <div class="betty-header-right">
+          <span class="betty-drag-grip" title="גרור חלון (במצב צף)" aria-hidden="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="9" cy="5" r="1"></circle>
+              <circle cx="9" cy="12" r="1"></circle>
+              <circle cx="9" cy="19" r="1"></circle>
+              <circle cx="15" cy="5" r="1"></circle>
+              <circle cx="15" cy="12" r="1"></circle>
+              <circle cx="15" cy="19" r="1"></circle>
+            </svg>
+          </span>
+          <div class="betty-mini-avatar" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 8V4H8"></path>
+              <rect width="16" height="12" x="4" y="8" rx="2"></rect>
+              <path d="M2 14h2"></path>
+              <path d="M20 14h2"></path>
+              <path d="M15 13v2"></path>
+              <path d="M9 13v2"></path>
+            </svg>
+          </div>
+          <div class="betty-header-titles">
+            <div class="betty-title-row">
+              <strong>בטי (Betty)</strong>
+            </div>
+            <span id="bettySubStatus">מומחית המערכת ויועצת הנדסת פרומפטים</span>
+          </div>
+        </div>
+        <div class="betty-window-actions">
+          <button type="button" id="bettyDockBtn" class="betty-icon-btn active" title="עגן כסרגל צד (Push Panel) / חלון צף">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+              <path d="M9 3v18"></path>
+            </svg>
+          </button>
+          <button type="button" id="bettyClearBtn" class="betty-icon-btn" title="נקה שיחה במצב הנוכחי">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"></polyline>
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+            </svg>
+          </button>
+          <button type="button" id="bettyMaximizeBtn" class="betty-icon-btn" title="הגדל / הקטן חלון">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 3 21 3 21 9"></polyline>
+              <polyline points="9 21 3 21 3 15"></polyline>
+              <line x1="21" y1="3" x2="14" y2="10"></line>
+              <line x1="3" y1="21" x2="10" y2="14"></line>
+            </svg>
+          </button>
+          <button type="button" id="bettyCloseBtn" class="betty-icon-btn" title="סגור חלון">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
         </div>
       </div>
-      <div class="betty-window-actions">
-        <button type="button" id="bettyDockBtn" class="betty-icon-btn active" title="עגן כסרגל צד / חלון צף">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <rect width="18" height="18" x="3" y="3" rx="2"></rect>
-            <path d="M9 3v18"></path>
-          </svg>
-        </button>
-        <button type="button" id="bettyClearBtn" class="betty-icon-btn" title="נקה שיחה במצב הנוכחי">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="3 6 5 6 21 6"></polyline>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
-          </svg>
-        </button>
-        <button type="button" id="bettyMaximizeBtn" class="betty-icon-btn" title="הגדל / הקטן חלון">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="15 3 21 3 21 9"></polyline>
-            <polyline points="9 21 3 21 3 15"></polyline>
-            <line x1="21" y1="3" x2="14" y2="10"></line>
-            <line x1="3" y1="21" x2="10" y2="14"></line>
-          </svg>
-        </button>
-        <button type="button" id="bettyCloseBtn" class="betty-icon-btn" title="סגור חלון">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+
+      <!-- Single-Line Segmented Control Mode Switcher -->
+      <div class="betty-mode-switcher-wrap">
+        <div class="betty-mode-switcher" role="tablist" aria-label="מצב ייעוץ בטי">
+          <button type="button" class="betty-mode-btn active" data-mode="tech_support" role="tab" aria-selected="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
+            </svg>
+            <span>תמיכה טכנית והדרכה</span>
+          </button>
+          <button type="button" class="betty-mode-btn" data-mode="prompt_advisor" role="tab" aria-selected="false">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+              <polyline points="2 17 12 22 22 17"></polyline>
+              <polyline points="2 12 12 17 22 12"></polyline>
+            </svg>
+            <span>Prompt Advisor</span>
+          </button>
+        </div>
       </div>
-    </div>
 
-    <!-- Single-Line Segmented Control Mode Switcher -->
-    <div class="betty-mode-switcher-wrap">
-      <div class="betty-mode-switcher" role="tablist" aria-label="מצב ייעוץ בטי">
-        <button type="button" class="betty-mode-btn active" data-mode="tech_support" role="tab" aria-selected="true">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path>
-          </svg>
-          <span>תמיכה טכנית והדרכה</span>
-        </button>
-        <button type="button" class="betty-mode-btn" data-mode="prompt_advisor" role="tab" aria-selected="false">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
-            <polyline points="2 17 12 22 22 17"></polyline>
-            <polyline points="2 12 12 17 22 12"></polyline>
-          </svg>
-          <span>Prompt Advisor</span>
-        </button>
+      <!-- Quick Questions Bar for Betty -->
+      <div class="betty-quick-chips" id="bettyQuickChips"></div>
+
+      <!-- Betty Chat Messages -->
+      <div class="betty-messages" id="bettyMessages"></div>
+
+      <!-- Betty Thinking Indicator -->
+      <div class="betty-thinking hidden" id="bettyThinking">
+        <div class="spinner-ring spinner-sm"></div>
+        <span id="bettyThinkingText">בטי מנתחת ומגבשת תשובה...</span>
       </div>
-    </div>
 
-    <!-- Quick Questions Bar for Betty -->
-    <div class="betty-quick-chips" id="bettyQuickChips"></div>
-
-    <!-- Betty Chat Messages -->
-    <div class="betty-messages" id="bettyMessages"></div>
-
-    <!-- Betty Thinking Indicator -->
-    <div class="betty-thinking hidden" id="bettyThinking">
-      <div class="spinner-ring spinner-sm"></div>
-      <span id="bettyThinkingText">בטי מנתחת ומגבשת תשובה...</span>
-    </div>
-
-    <!-- Betty Input Form -->
-    <form class="betty-input-bar" id="bettyForm">
-      <textarea
-        id="bettyInput"
-        rows="2"
-        placeholder="שאל את בטי כל שאלה... (Enter לשליחה, Shift+Enter לשורה חדשה)"
-        required
-      ></textarea>
-      <button type="submit" id="bettySendBtn" class="btn btn-primary betty-send-btn">
-        <span>שלח</span>
-      </button>
-    </form>
-  </aside>
+      <!-- Betty Input Form -->
+      <form class="betty-input-bar" id="bettyForm">
+        <textarea
+          id="bettyInput"
+          rows="2"
+          placeholder="שאל את בטי כל שאלה... (Enter לשליחה, Shift+Enter לשורה חדשה)"
+          required
+        ></textarea>
+        <button type="submit" id="bettySendBtn" class="btn btn-primary betty-send-btn">
+          <span>שלח</span>
+        </button>
+      </form>
+    </aside>
+  </div>
 
   <!-- Toast Notification -->
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=3.0"></script>
 </body>
 </html>
