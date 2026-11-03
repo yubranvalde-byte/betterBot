@@ -5,6 +5,40 @@
 let currentSession = null;
 let isStreaming = false;
 let showRawPrompt = false;
+let currentDiffMode = "unified"; // "unified" | "split"
+let activeStreamingNode = null;
+let activeStreamingDesc = "";
+
+const ICONS = {
+  check: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+  alert: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`,
+  edit: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>`,
+  download: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+  user: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`,
+  bot: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>`,
+  zap: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>`,
+  cpu: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+  shield: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>`,
+  shieldLg: `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path><polyline points="9 12 11 14 15 10"></polyline></svg>`,
+  layersLg: `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+  cpuLg: `<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>`,
+  target: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="6"></circle><circle cx="12" cy="12" r="2"></circle></svg>`,
+  mic: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="22"></line></svg>`,
+  sliders: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>`,
+  workflow: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"></polyline><path d="M3 11V9a4 4 0 0 1 4-4h14"></path><polyline points="7 23 3 19 7 15"></polyline><path d="M21 13v2a4 4 0 0 1-4 4H3"></path></svg>`,
+  ban: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>`,
+  fileText: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><line x1="10" y1="9" x2="8" y2="9"></line></svg>`,
+  wrench: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>`,
+  layers: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
+  trash: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>`,
+};
+
+const NODE_ROLES = {
+  node_1_helper: "Node 1: The Helper — ארכיטקט דרישות וראיון",
+  node_2_construct: "Node 2: The Construct — מהדר הפרומפטים",
+  node_3_upgrader: "Node 3: The Upgrader — עורך אטומי ומשדרג",
+  node_4_adjudicator: "Node 4: The Adjudicator — בקרת איכות ורגרסיה",
+};
 
 const els = {
   modelNameText: document.getElementById("modelNameText"),
@@ -53,6 +87,9 @@ const els = {
 
   qaLogsList: document.getElementById("qaLogsList"),
   diffComparisonSection: document.getElementById("diffComparisonSection"),
+  diffUnifiedContainer: document.getElementById("diffUnifiedContainer"),
+  diffUnifiedPre: document.getElementById("diffUnifiedPre"),
+  diffSplitContainer: document.getElementById("diffSplitContainer"),
   diffChampionPre: document.getElementById("diffChampionPre"),
   diffChallengerPre: document.getElementById("diffChallengerPre"),
 
@@ -142,6 +179,43 @@ function bindUIEvents() {
     });
   });
 
+  // Interactive Pipeline Node Navigation
+  const nodeRoutes = {
+    node_1_helper: () => els.userInput.focus(),
+    node_2_construct: () => switchTab("blueprintTab"),
+    node_4_adjudicator: () => switchTab("qaTab"),
+    node_3_upgrader: () => switchTab("promptTab"),
+  };
+
+  document.querySelectorAll(".agent-node").forEach((nodeEl) => {
+    const nid = nodeEl.dataset.node;
+    const triggerRoute = () => {
+      if (nodeRoutes[nid]) nodeRoutes[nid]();
+    };
+    nodeEl.addEventListener("click", triggerRoute);
+    nodeEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        triggerRoute();
+      }
+    });
+  });
+
+  // Diff View Mode Toggle (Unified vs Side-by-Side)
+  document.querySelectorAll(".diff-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.dataset.diffMode || "unified";
+      currentDiffMode = mode;
+      document.querySelectorAll(".diff-mode-btn").forEach((b) => {
+        b.classList.toggle("active", b.dataset.diffMode === mode);
+      });
+      if (els.diffUnifiedContainer && els.diffSplitContainer) {
+        els.diffUnifiedContainer.classList.toggle("hidden", mode !== "unified");
+        els.diffSplitContainer.classList.toggle("hidden", mode !== "split");
+      }
+    });
+  });
+
   // Preset cards — populate input textarea for user editing instead of immediate send
   document.querySelectorAll(".preset-card").forEach((card) => {
     card.addEventListener("click", () => {
@@ -153,7 +227,7 @@ function bindUIEvents() {
       els.userInput.classList.remove("input-flash");
       void els.userInput.offsetWidth; // trigger reflow
       els.userInput.classList.add("input-flash");
-      showToast("✏️ ההצעה הועתקה לתיבת הטקסט — תוכל לערוך אותה וללחוץ על 'שלח'");
+      showToast("ההצעה הועתקה לתיבת הטקסט — ניתן לערוך וללחוץ על 'שלח'", "edit");
     });
   });
 
@@ -188,7 +262,7 @@ function bindUIEvents() {
     const promptText = getBestPrompt(currentSession);
     if (!promptText) return;
     navigator.clipboard.writeText(promptText);
-    showToast("✅ פרומפט המערכת הועתק ללוח!");
+    showToast("פרומפט המערכת הועתק ללוח", "check");
   });
 
   // Download Prompt .MD
@@ -202,7 +276,7 @@ function bindUIEvents() {
     a.download = `system_prompt_${currentSession?.session_id || "gem"}.md`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast("📥 הקובץ ירד בהצלחה!");
+    showToast("הקובץ ירד בהצלחה", "download");
   });
 
   // Copy XML
@@ -210,13 +284,15 @@ function bindUIEvents() {
     const xml = currentSession?.raw_blueprint || "";
     if (!xml) return;
     navigator.clipboard.writeText(xml);
-    showToast("✅ קוד ה-XML Blueprint הועתק ללוח!");
+    showToast("קוד ה-XML Blueprint הועתק ללוח", "check");
   });
 }
 
 function switchTab(tabId) {
   document.querySelectorAll(".tab-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.tab === tabId);
+    const isActive = b.dataset.tab === tabId;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", isActive ? "true" : "false");
   });
   document.querySelectorAll(".tab-content").forEach((c) => {
     c.classList.toggle("active", c.id === tabId);
@@ -264,11 +340,14 @@ async function sendUserMessage(messageText) {
       }
     }
   } catch (err) {
-    showToast(`⚠️ שגיאת תקשורת: ${err.message}`);
+    showToast(`שגיאת תקשורת: ${err.message}`, "alert");
   } finally {
     isStreaming = false;
+    activeStreamingNode = null;
+    activeStreamingDesc = "";
     els.sendBtn.disabled = false;
     els.activeExecutionBar.classList.add("hidden");
+    if (currentSession) renderAll(currentSession);
     await refreshSessionSelector();
     els.userInput.focus();
   }
@@ -299,11 +378,18 @@ function handleSSEBlock(block) {
     currentSession = payload;
     renderAll(currentSession);
   } else if (eventType === "node_start") {
+    activeStreamingNode = payload.node;
+    activeStreamingDesc = payload.description || "";
     els.activeExecutionBar.classList.remove("hidden");
     els.execNodeTitle.textContent = payload.title;
     els.execNodeDesc.textContent = payload.description;
     highlightActiveNode(payload.node, payload.description);
+    if (currentSession) {
+      renderPromptTab(currentSession);
+      renderBlueprintTab(currentSession);
+    }
   } else if (eventType === "node_complete") {
+    activeStreamingNode = null;
     currentSession = payload.session;
     renderAll(currentSession);
     if (payload.node === "node_1_helper" && currentSession.raw_blueprint) {
@@ -312,23 +398,25 @@ function handleSSEBlock(block) {
       switchTab("promptTab");
     }
   } else if (eventType === "done") {
+    activeStreamingNode = null;
     currentSession = payload;
     els.activeExecutionBar.classList.add("hidden");
     renderAll(currentSession);
     if (currentSession.status === "passed") {
       switchTab("promptTab");
-      showToast("🌟 הפרומפט אושר על ידי מבקר האיכות!");
+      showToast("הפרומפט אושר על ידי מבקר האיכות (PASS)", "check");
     } else if (currentSession.status === "escalated") {
       switchTab("qaTab");
-      showToast("⚠️ נדרשת הכוונה ידנית (Circuit Breaker)");
+      showToast("נדרשת הכוונה ידנית (Circuit Breaker)", "alert");
     }
   } else if (eventType === "error") {
+    activeStreamingNode = null;
     els.activeExecutionBar.classList.add("hidden");
     if (payload.session) {
       currentSession = payload.session;
       renderAll(currentSession);
     }
-    showToast(`❌ שגיאה: ${payload.error}`);
+    showToast(`שגיאה: ${payload.error}`, "alert");
   }
 }
 
@@ -337,7 +425,6 @@ function handleSSEBlock(block) {
 // ==========================================
 function renderAll(session) {
   if (!session) return;
-  const state = session.state || {};
   const userTurns = (session.chat_history || []).filter((m) => m.role === "user").length;
   els.presetsContainer.classList.toggle("hidden", userTurns > 0);
 
@@ -374,18 +461,18 @@ function renderPipelineStatus(session) {
   els.globalStageBadge.className = "stage-indicator";
   if (status === "passed") {
     els.globalStageBadge.classList.add("status-passed");
-    els.globalStageBadge.textContent = "אושר סופית (PASS)";
-    els.globalStageDesc.textContent = "הפרומפט עבר בקרת איכות ומוכן להטמעה. ניתן לשלוח הנחיות שדרוג נוספות.";
+    els.globalStageBadge.innerHTML = `אושר סופית (<code class="tech-token" dir="ltr">PASS</code>)`;
+    els.globalStageDesc.innerHTML = `הפרומפט עבר בקרת איכות ומוכן להטמעה. ניתן לשלוח הנחיות שדרוג נוספות.`;
   } else if (status === "escalated") {
     els.globalStageBadge.classList.add("status-escalated");
-    els.globalStageBadge.textContent = "הסלמה (ESCALATE)";
-    els.globalStageDesc.textContent = "מפסק הפחת הופעל. הזן הוראת תיקון ידנית בתיבת הצ'אט עבור The Upgrader.";
+    els.globalStageBadge.innerHTML = `הסלמה (<code class="tech-token" dir="ltr">ESCALATE</code>)`;
+    els.globalStageDesc.innerHTML = `מפסק הפחת הופעל. הזן הוראת תיקון ידנית בתיבת הצ'אט עבור <code class="tech-token" dir="ltr">The Upgrader</code>.`;
   } else if (status === "compiling") {
     els.globalStageBadge.textContent = "הידור ובקרת איכות";
-    els.globalStageDesc.textContent = "הסוכנים מהדרים ובודקים את הפרומפט מול תוכנית האב...";
+    els.globalStageDesc.innerHTML = `הסוכנים מהדרים ובודקים את הפרומפט מול <code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>...`;
   } else if (status === "interviewing") {
-    els.globalStageBadge.textContent = "שלב הראיון (Phase 1)";
-    els.globalStageDesc.textContent = "The Helper אוסף מידע לאפיון ה-XML Blueprint";
+    els.globalStageBadge.innerHTML = `שלב הראיון (<code class="tech-token" dir="ltr">Phase 1</code>)`;
+    els.globalStageDesc.innerHTML = `<code class="tech-token" dir="ltr">The Helper</code> אוסף מידע לאפיון ה-<code class="tech-token" dir="ltr">XML Blueprint</code>`;
   } else {
     els.globalStageBadge.textContent = "מוכן להפעלה";
     els.globalStageDesc.textContent = "תאר את הבוט הרצוי כדי להתחיל את תהליך הייצור";
@@ -399,9 +486,11 @@ function renderPipelineStatus(session) {
     if (!el || !badge) return;
     el.className = "agent-node";
 
-    if (session.active_node === nid) {
+    const activeNodeId = activeStreamingNode || session.active_node;
+    if (activeNodeId === nid) {
       el.classList.add("active");
       badge.textContent = "פעיל כעת...";
+      el.title = `${NODE_ROLES[nid]} — פעיל כעת`;
       return;
     }
 
@@ -431,10 +520,10 @@ function renderPipelineStatus(session) {
     } else if (nid === "node_4_adjudicator") {
       if (status === "passed") {
         el.classList.add("completed");
-        badge.textContent = "PASS ✅";
+        badge.textContent = "PASS";
       } else if (status === "escalated") {
         el.classList.add("danger");
-        badge.textContent = "ESCALATE ⚠️";
+        badge.textContent = "ESCALATE";
       } else if (iter > 0) {
         el.classList.add("warning");
         badge.textContent = `בבדיקה (${iter})`;
@@ -442,6 +531,8 @@ function renderPipelineStatus(session) {
         badge.textContent = "המתנה";
       }
     }
+
+    el.title = `${NODE_ROLES[nid]} (${badge.textContent})`;
   });
 }
 
@@ -454,6 +545,7 @@ function highlightActiveNode(nodeId, description) {
     if (nid === nodeId) {
       el.classList.add("active");
       badge.textContent = "פועל...";
+      el.title = `${NODE_ROLES[nid]} — ${description || "פועל כעת"}`;
     } else {
       el.classList.remove("active");
     }
@@ -468,19 +560,19 @@ function renderInputMode(session) {
     (session.state && session.state.iteration_count > 0);
 
   if (isOverrideMode) {
-    els.inputModeBadge.textContent = "מצב עריכה ישירה (Upgrader)";
+    els.inputModeBadge.innerHTML = `מצב עריכה ישירה (<code class="tech-token" dir="ltr">Upgrader</code>)`;
     els.inputModeBadge.classList.add("override-mode");
     els.overrideNotice.classList.remove("hidden");
     els.userInput.placeholder =
       "כתוב הנחיית שדרוג או תיקון עבור The Upgrader (למשל: 'הוסף חוק שאוסר על שימוש באימוג'ים')...";
-    els.chatSubheader.textContent = "שליחת פקודות שדרוג אטומיות ישירות לסוכן העריכה (Node 3)";
+    els.chatSubheader.innerHTML = `שליחת פקודות שדרוג אטומיות ישירות לסוכן העריכה (<code class="tech-token" dir="ltr">The Upgrader</code>)`;
   } else {
     els.inputModeBadge.textContent = "מצב ראיון";
     els.inputModeBadge.classList.remove("override-mode");
     els.overrideNotice.classList.add("hidden");
     els.userInput.placeholder =
       "תאר את הבוט שאתה רוצה לבנות או ענה לשאלות הארכיטקט... (Enter לשליחה)";
-    els.chatSubheader.textContent = "שיחה אינטראקטיבית עם The Helper לבניית תוכנית האב";
+    els.chatSubheader.innerHTML = `שיחה אינטראקטיבית עם <code class="tech-token" dir="ltr">The Helper</code> לבניית תוכנית האב`;
   }
 }
 
@@ -498,14 +590,17 @@ function renderChatHistory(history) {
 
     const agentSpan = document.createElement("span");
     agentSpan.className = "bubble-agent-name";
-    agentSpan.textContent =
-      msg.role === "user"
-        ? msg.is_override
-          ? "⚡ אתה (פקודת Override)"
-          : "👤 אתה"
-        : `🤖 ${msg.agent || "BetterBot"}`;
+    if (msg.role === "user") {
+      agentSpan.innerHTML = msg.is_override
+        ? `${ICONS.zap} <span>אתה (<code class="tech-token" dir="ltr">Override</code>)</span>`
+        : `${ICONS.user} <span>אתה</span>`;
+    } else {
+      const agentName = escapeHtml(msg.agent || "BetterBot");
+      agentSpan.innerHTML = `${ICONS.bot} <code class="tech-token" dir="ltr">${agentName}</code>`;
+    }
 
     const timeSpan = document.createElement("span");
+    timeSpan.className = "tl-time";
     timeSpan.textContent = msg.timestamp || "";
 
     header.appendChild(agentSpan);
@@ -522,7 +617,7 @@ function renderChatHistory(history) {
       const details = document.createElement("details");
       details.className = "thought-drawer";
       const summary = document.createElement("summary");
-      summary.textContent = "🧠 הצג תהליך חשיבה סמוי (<thought_process>)";
+      summary.innerHTML = `${ICONS.cpu} <span>הצג תהליך חשיבה סמוי (<code class="tech-token" dir="ltr">&lt;thought_process&gt;</code>)</span>`;
       const pre = document.createElement("pre");
       pre.dir = "ltr";
       pre.textContent = msg.thought;
@@ -543,8 +638,8 @@ function appendOptimisticUserBubble(text) {
   const now = new Date().toTimeString().slice(0, 8);
   bubble.innerHTML = `
     <div class="bubble-header">
-      <span class="bubble-agent-name">👤 אתה</span>
-      <span>${now}</span>
+      <span class="bubble-agent-name">${ICONS.user} <span>אתה</span></span>
+      <span class="tl-time">${now}</span>
     </div>
     <div class="bubble-text">${escapeHtml(text)}</div>
   `;
@@ -557,19 +652,65 @@ function getBestPrompt(session) {
   return session.clean_champion_prompt || session.clean_challenger_prompt || "";
 }
 
+function buildSkeletonHTML(agentLabel, actionDesc) {
+  return `
+    <div class="skeleton-loader">
+      <div class="skeleton-header">
+        <div class="spinner-ring spinner-sm"></div>
+        <span>מהדר תוצר חי — <code class="tech-token" dir="ltr">${escapeHtml(agentLabel)}</code></span>
+      </div>
+      <div class="skeleton-sub">${escapeHtml(actionDesc)}</div>
+      <div class="skeleton-lines" dir="ltr">
+        <div class="skeleton-bar w-90"></div>
+        <div class="skeleton-bar w-75"></div>
+        <div class="skeleton-bar w-85"></div>
+        <div class="skeleton-bar w-60"></div>
+      </div>
+    </div>
+  `;
+}
+
 function renderPromptTab(session) {
   const promptText = getBestPrompt(session);
   const state = session.state || {};
+  const activeNode = activeStreamingNode || session.active_node;
+  const isPromptCompiling =
+    activeNode === "node_2_construct" ||
+    activeNode === "node_3_upgrader" ||
+    activeNode === "node_4_adjudicator" ||
+    session.status === "compiling";
 
   if (!promptText) {
     els.promptEmptyState.classList.remove("hidden");
     els.promptDisplayContainer.classList.add("hidden");
     els.copyPromptBtn.disabled = true;
     els.downloadPromptBtn.disabled = true;
-    els.promptStatusPill.textContent = "ריק";
-    els.promptVersionTag.textContent = "ממתין להידור";
-    els.promptVersionTag.className = "badge badge-neutral";
-    els.promptStatsText.textContent = "0 תווים";
+    els.promptStatsText.textContent = "0 תווים · ~0 טוקנים";
+
+    if (isPromptCompiling) {
+      const agentLabel =
+        activeNode === "node_4_adjudicator"
+          ? "The Adjudicator"
+          : activeNode === "node_3_upgrader"
+          ? "The Upgrader"
+          : "The Construct";
+      els.promptStatusPill.textContent = "בהידור...";
+      els.promptVersionTag.innerHTML = `<code class="tech-token" dir="ltr">${agentLabel}</code> פעיל`;
+      els.promptVersionTag.className = "badge badge-warning";
+      els.promptEmptyState.innerHTML = buildSkeletonHTML(
+        agentLabel,
+        activeStreamingDesc || "בונה ומהדר את פרומפט המערכת מתוך תוכנית האב..."
+      );
+    } else {
+      els.promptStatusPill.textContent = "ריק";
+      els.promptVersionTag.textContent = "ממתין להידור";
+      els.promptVersionTag.className = "badge badge-neutral";
+      els.promptEmptyState.innerHTML = `
+        <div class="empty-illustration">${ICONS.layersLg}</div>
+        <h3>פרומפט המערכת יופיע כאן</h3>
+        <p>לאחר סיום הראיון הקצר עם <code class="tech-token" dir="ltr">The Helper</code>, המהדר (<code class="tech-token" dir="ltr">The Construct</code>) יבנה כאן את פרומפט המערכת המלא ויעביר אותו בדיקות <code class="tech-token" dir="ltr">QA</code> אוטומטיות.</p>
+      `;
+    }
     return;
   }
 
@@ -578,17 +719,16 @@ function renderPromptTab(session) {
   els.copyPromptBtn.disabled = false;
   els.downloadPromptBtn.disabled = false;
 
-  const charCount = promptText.length;
-  const estTokens = Math.round(charCount / 3.8);
-  els.promptStatsText.textContent = `${charCount.toLocaleString()} תווים (~${estTokens} טוקנים)`;
+  const chars = promptText.length;
+  els.promptStatsText.textContent = `${chars.toLocaleString()} תווים · ~${Math.ceil(chars / 4).toLocaleString()} טוקנים`;
 
   if (session.status === "passed") {
-    els.promptStatusPill.textContent = "מאושר ✅";
-    els.promptVersionTag.textContent = "🏆 Champion Prompt (Approved)";
+    els.promptStatusPill.textContent = "מאושר";
+    els.promptVersionTag.innerHTML = `${ICONS.check} <span>Champion Prompt (Approved)</span>`;
     els.promptVersionTag.className = "badge badge-success";
   } else {
     els.promptStatusPill.textContent = `איטרציה ${state.iteration_count || 1}`;
-    els.promptVersionTag.textContent = "⚡ גרסת עבודה (Challenger / Champion)";
+    els.promptVersionTag.innerHTML = `${ICONS.zap} <span>גרסת עבודה (Challenger / Champion)</span>`;
     els.promptVersionTag.className = "badge badge-warning";
   }
 
@@ -599,18 +739,36 @@ function renderPromptTab(session) {
     els.compilationCheckBox.classList.add("hidden");
   }
 
-  els.promptFormattedView.textContent = promptText;
+  els.promptFormattedView.innerHTML = renderStructuredMarkdown(promptText);
   els.promptRawView.textContent = state.champion_prompt || state.challenger_prompt || promptText;
 }
 
 function renderBlueprintTab(session) {
   const rawXml = session.raw_blueprint || "";
   const parsed = session.parsed_blueprint || {};
+  const activeNode = activeStreamingNode || session.active_node;
+  const isBlueprintCompiling =
+    activeNode === "node_1_helper" ||
+    activeNode === "node_2_construct" ||
+    activeNode === "node_3_upgrader";
 
   if (!rawXml) {
     els.blueprintEmptyState.classList.remove("hidden");
     els.blueprintContainer.classList.add("hidden");
     els.copyXmlBtn.disabled = true;
+
+    if (isBlueprintCompiling && isStreaming) {
+      els.blueprintEmptyState.innerHTML = buildSkeletonHTML(
+        activeNode === "node_3_upgrader" ? "The Upgrader" : "The Helper",
+        activeStreamingDesc || "מנתח דרישות ומגבש את מבנה ה-XML Blueprint..."
+      );
+    } else {
+      els.blueprintEmptyState.innerHTML = `
+        <div class="empty-illustration">${ICONS.cpuLg}</div>
+        <h3>תוכנית האב (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>) טרם הופקה</h3>
+        <p>השלם את שאלות המיקוד בראיון עם <code class="tech-token" dir="ltr">The Helper</code> כדי לחלץ את המודולים הקוגניטיביים וחוקי הפעולה.</p>
+      `;
+    }
     return;
   }
 
@@ -620,13 +778,13 @@ function renderBlueprintTab(session) {
   els.bpVersionText.textContent = `V${parsed.version || "1.0"}`;
 
   const cardDefs = [
-    { key: "title", label: "🎯 Title (פרסונה ותפקיד)", full: false },
-    { key: "tone", label: "🎙️ Tone (סגנון דיבור)", full: false },
-    { key: "domain_expertise", label: "🧠 Domain Expertise (תחומי מומחיות)", full: false },
-    { key: "cognitive_modules", label: "⚙️ Cognitive Modules (מודולים קוגניטיביים)", full: false },
-    { key: "workflow", label: "🔄 Workflow (תהליך עבודה מובנה)", full: true },
-    { key: "negative_constraints", label: "🚫 Negative Constraints (איסורים ומגבלות)", full: true },
-    { key: "output_format", label: "📄 Output Format (תבנית פלט)", full: true },
+    { key: "title", icon: ICONS.target, label: "Title (פרסונה ותפקיד)", full: false },
+    { key: "tone", icon: ICONS.mic, label: "Tone (סגנון דיבור)", full: false },
+    { key: "domain_expertise", icon: ICONS.cpu, label: "Domain Expertise (תחומי מומחיות)", full: false },
+    { key: "cognitive_modules", icon: ICONS.sliders, label: "Cognitive Modules (מודולים קוגניטיביים)", full: false },
+    { key: "workflow", icon: ICONS.workflow, label: "Workflow (תהליך עבודה מובנה)", full: true },
+    { key: "negative_constraints", icon: ICONS.ban, label: "Negative Constraints (איסורים ומגבלות)", full: true },
+    { key: "output_format", icon: ICONS.fileText, label: "Output Format (תבנית פלט)", full: true },
   ];
 
   els.bpCardsGrid.innerHTML = "";
@@ -636,7 +794,7 @@ function renderBlueprintTab(session) {
     card.className = `bp-card ${def.full ? "full-width" : ""}`;
     card.dir = "ltr";
     card.innerHTML = `
-      <div class="bp-card-label">${def.label}</div>
+      <div class="bp-card-label">${def.icon} <span>${escapeHtml(def.label)}</span></div>
       <div class="bp-card-value">${escapeHtml(parsed[def.key])}</div>
     `;
     els.bpCardsGrid.appendChild(card);
@@ -653,9 +811,9 @@ function renderQATab(session) {
   if (logs.length === 0) {
     els.qaLogsList.innerHTML = `
       <div class="empty-state">
-        <div class="empty-illustration">🛡️</div>
-        <h3>טרם בוצעו סבבי QA</h3>
-        <p>ברגע שיופק פרומפט ראשוני, ה-Adjudicator יבצע ביקורת איכות קפדנית ויציג כאן את הממצאים.</p>
+        <div class="empty-illustration">${ICONS.shieldLg}</div>
+        <h3>טרם בוצעו סבבי <code class="tech-token" dir="ltr">QA</code></h3>
+        <p>ברגע שיופק פרומפט ראשוני, ה-<code class="tech-token" dir="ltr">Adjudicator</code> יבצע ביקורת איכות קפדנית ויציג כאן את הממצאים.</p>
       </div>
     `;
     els.diffComparisonSection.classList.add("hidden");
@@ -675,33 +833,119 @@ function renderQATab(session) {
     els.qaLogsList.appendChild(item);
   });
 
-  if (session.clean_champion_prompt || session.clean_challenger_prompt) {
+  const championText = session.clean_champion_prompt || "";
+  const challengerText = session.clean_challenger_prompt || "";
+
+  if (championText || challengerText) {
     els.diffComparisonSection.classList.remove("hidden");
-    els.diffChampionPre.textContent = session.clean_champion_prompt || "(טרם נקבע Champion)";
-    els.diffChallengerPre.textContent = session.clean_challenger_prompt || "(טרם נקבע Challenger)";
+    els.diffChampionPre.textContent = championText || "(טרם נקבע Champion)";
+    els.diffChallengerPre.textContent = challengerText || "(טרם נקבע Challenger)";
+    renderUnifiedDiff(championText, challengerText);
   } else {
     els.diffComparisonSection.classList.add("hidden");
   }
 }
 
+// ==========================================
+// Line-by-Line Unified Diff Utility
+// ==========================================
+function computeLineDiff(oldText, newText) {
+  const oldLines = (oldText || "").split("\n");
+  const newLines = (newText || "").split("\n");
+  const n = oldLines.length;
+  const m = newLines.length;
+
+  // Guard for very large inputs: fallback to simple prefix/suffix + changed block
+  if (n * m > 250000) {
+    const out = [];
+    const maxLen = Math.max(n, m);
+    for (let i = 0; i < maxLen; i++) {
+      if (i < n && i < m && oldLines[i] === newLines[i]) {
+        out.push({ type: "ctx", text: oldLines[i] });
+      } else {
+        if (i < n) out.push({ type: "del", text: oldLines[i] });
+        if (i < m) out.push({ type: "add", text: newLines[i] });
+      }
+    }
+    return out;
+  }
+
+  const dp = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      if (oldLines[i] === newLines[j]) {
+        dp[i][j] = 1 + dp[i + 1][j + 1];
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const result = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      result.push({ type: "ctx", text: oldLines[i] });
+      i++;
+      j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      result.push({ type: "del", text: oldLines[i] });
+      i++;
+    } else {
+      result.push({ type: "add", text: newLines[j] });
+      j++;
+    }
+  }
+  while (i < n) {
+    result.push({ type: "del", text: oldLines[i++] });
+  }
+  while (j < m) {
+    result.push({ type: "add", text: newLines[j++] });
+  }
+  return result;
+}
+
+function renderUnifiedDiff(championText, challengerText) {
+  if (!els.diffUnifiedPre) return;
+  const base = championText || challengerText || "";
+  const target = challengerText || championText || "";
+  const ops = computeLineDiff(base, target);
+
+  els.diffUnifiedPre.innerHTML = ops
+    .map((op) => {
+      if (op.type === "add") {
+        return `<span class="diff-line diff-add">+ ${escapeHtml(op.text)}</span>`;
+      }
+      if (op.type === "del") {
+        return `<span class="diff-line diff-del">- ${escapeHtml(op.text)}</span>`;
+      }
+      return `<span class="diff-line diff-ctx">  ${escapeHtml(op.text)}</span>`;
+    })
+    .join("");
+}
+
 function renderTimelineTab(timeline) {
   els.timelineList.innerHTML = "";
-  timeline.slice().reverse().forEach((item) => {
-    const row = document.createElement("div");
-    row.className = "timeline-item";
-    row.innerHTML = `
-      <div class="tl-time">${escapeHtml(item.timestamp || "")}</div>
-      <div class="tl-body">
-        <div class="tl-title">${escapeHtml(item.title || "")}</div>
-        <div class="tl-detail">${escapeHtml(item.detail || "")}</div>
-      </div>
-    `;
-    els.timelineList.appendChild(row);
-  });
+  timeline
+    .slice()
+    .reverse()
+    .forEach((item) => {
+      const row = document.createElement("div");
+      row.className = "timeline-item";
+      row.innerHTML = `
+        <div class="tl-time">${escapeHtml(item.timestamp || "")}</div>
+        <div class="tl-body">
+          <div class="tl-title">${formatSimpleMarkdown(item.title || "")}</div>
+          <div class="tl-detail">${formatSimpleMarkdown(item.detail || "")}</div>
+        </div>
+      `;
+      els.timelineList.appendChild(row);
+    });
 }
 
 // ==========================================
-// Helpers
+// Helpers & BiDi Token Formatting
 // ==========================================
 function escapeHtml(str) {
   return String(str)
@@ -710,16 +954,125 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;");
 }
 
+const BI_DI_TECH_TERMS = [
+  "The Helper",
+  "The Construct",
+  "The Adjudicator",
+  "The Upgrader",
+  "Adjudicator",
+  "Upgrader",
+  "Hill Climbing",
+  "Circuit Breaker",
+  "Challenger",
+  "Champion",
+];
+
+function wrapBiDiTechTokens(safeHtml) {
+  let out = safeHtml.replace(
+    /&lt;(\/?[A-Za-z_][A-Za-z0-9_-]*)&gt;/g,
+    '<code class="tech-token" dir="ltr">&lt;$1&gt;</code>'
+  );
+  BI_DI_TECH_TERMS.forEach((term) => {
+    const reg = new RegExp(`\\b(${term})\\b`, "g");
+    out = out.replace(reg, '<code class="tech-token" dir="ltr">$1</code>');
+  });
+  return out;
+}
+
 function formatSimpleMarkdown(text) {
   let safe = escapeHtml(text);
+  const codeSlots = [];
+  safe = safe.replace(/`([^`]+)`/g, (_, code) => {
+    const token = `__CODE_SLOT_${codeSlots.length}__`;
+    codeSlots.push(`<code class="tech-token" dir="ltr">${code}</code>`);
+    return token;
+  });
   safe = safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
-  safe = safe.replace(/`([^`]+)`/g, '<code class="mono-text">$1</code>');
+  safe = wrapBiDiTechTokens(safe);
+  codeSlots.forEach((html, idx) => {
+    safe = safe.replace(`__CODE_SLOT_${idx}__`, html);
+  });
   return safe;
 }
 
+function renderStructuredMarkdown(markdownText) {
+  if (!markdownText) return "";
+  const lines = markdownText.split("\n");
+  const out = [];
+  let inCodeBlock = false;
+  let codeLines = [];
+  let inList = false;
+  let listTag = "ul";
+
+  function closeList() {
+    if (inList) {
+      out.push(`</${listTag}>`);
+      inList = false;
+    }
+  }
+
+  for (const rawLine of lines) {
+    if (rawLine.trim().startsWith("```")) {
+      closeList();
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeLines = [];
+      } else {
+        out.push(`<pre dir="ltr"><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        inCodeBlock = false;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(rawLine);
+      continue;
+    }
+
+    const trimmed = rawLine.trim();
+    if (/^###\s+/.test(trimmed)) {
+      closeList();
+      out.push(`<h3>${formatSimpleMarkdown(trimmed.replace(/^###\s+/, ""))}</h3>`);
+    } else if (/^##\s+/.test(trimmed)) {
+      closeList();
+      out.push(`<h2>${formatSimpleMarkdown(trimmed.replace(/^##\s+/, ""))}</h2>`);
+    } else if (/^#\s+/.test(trimmed)) {
+      closeList();
+      out.push(`<h1>${formatSimpleMarkdown(trimmed.replace(/^#\s+/, ""))}</h1>`);
+    } else if (/^[-*]\s+/.test(trimmed)) {
+      if (!inList || listTag !== "ul") {
+        closeList();
+        listTag = "ul";
+        out.push("<ul>");
+        inList = true;
+      }
+      out.push(`<li>${formatSimpleMarkdown(trimmed.replace(/^[-*]\s+/, ""))}</li>`);
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      if (!inList || listTag !== "ol") {
+        closeList();
+        listTag = "ol";
+        out.push("<ol>");
+        inList = true;
+      }
+      out.push(`<li>${formatSimpleMarkdown(trimmed.replace(/^\d+\.\s+/, ""))}</li>`);
+    } else {
+      closeList();
+      out.push(formatSimpleMarkdown(rawLine));
+    }
+  }
+
+  closeList();
+  if (inCodeBlock) {
+    out.push(`<pre dir="ltr"><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  }
+
+  return out.join("\n");
+}
+
 let toastTimer = null;
-function showToast(msg) {
-  els.toast.textContent = msg;
+function showToast(msg, iconKey = "check") {
+  const iconSvg = ICONS[iconKey] || ICONS.check;
+  els.toast.innerHTML = `${iconSvg} <span>${escapeHtml(msg)}</span>`;
   els.toast.classList.remove("hidden");
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
@@ -727,10 +1080,8 @@ function showToast(msg) {
   }, 3400);
 }
 
-
-
 // =========================================================
-// BETTY (בטי) — Floating Draggable & Resizable Assistant
+// BETTY (בטי) — Dockable Slide-Over Drawer & Floating Assistant
 // =========================================================
 let bettyMode = "tech_support"; // "tech_support" | "prompt_advisor"
 let bettyHistories = {
@@ -757,6 +1108,7 @@ const BETTY_QUICK_SUGGESTIONS = {
 async function initBettyWidget() {
   const fab = document.getElementById("bettyFab");
   const win = document.getElementById("bettyWindow");
+  const dockBtn = document.getElementById("bettyDockBtn");
   const closeBtn = document.getElementById("bettyCloseBtn");
   const maxBtn = document.getElementById("bettyMaximizeBtn");
   const clearBtn = document.getElementById("bettyClearBtn");
@@ -793,14 +1145,38 @@ async function initBettyWidget() {
     fab.classList.remove("hidden");
   });
 
+  // Dock / Float Toggle Button
+  if (dockBtn) {
+    dockBtn.addEventListener("click", () => {
+      win.classList.remove("maximized");
+      const isNowDocked = win.classList.toggle("docked");
+      dockBtn.classList.toggle("active", isNowDocked);
+      if (isNowDocked) {
+        win.style.left = "";
+        win.style.top = "";
+        win.style.width = "";
+        win.style.height = "";
+      } else {
+        win.style.left = "24px";
+        win.style.top = "120px";
+        win.style.width = "440px";
+        win.style.height = "560px";
+      }
+    });
+  }
+
   // Maximize / Restore
   maxBtn.addEventListener("click", () => {
+    if (win.classList.contains("docked")) {
+      win.classList.remove("docked");
+      if (dockBtn) dockBtn.classList.remove("active");
+    }
     win.classList.toggle("maximized");
   });
 
-  // Double-clicking header also toggles maximize
+  // Double-clicking header toggles maximize when floating
   dragHeader.addEventListener("dblclick", (e) => {
-    if (e.target.closest("button")) return;
+    if (e.target.closest("button") || win.classList.contains("docked")) return;
     win.classList.toggle("maximized");
   });
 
@@ -817,14 +1193,14 @@ async function initBettyWidget() {
         const data = await res.json();
         bettyHistories[bettyMode] = data.history || [];
         renderBettyMessages();
-        showToast("🧹 שיחת בטי במצב הנוכחי אופסה");
+        showToast("שיחת בטי במצב הנוכחי אופסה", "trash");
       }
     } catch (err) {
       console.warn(err);
     }
   });
 
-  // Mode buttons
+  // Mode buttons (Segmented Control)
   document.querySelectorAll(".betty-mode-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
       const targetMode = btn.dataset.mode;
@@ -852,26 +1228,28 @@ async function initBettyWidget() {
     }
   });
 
-  // Setup Dragging & Resizing
+  // Setup Dragging & Resizing (when floating)
   setupBettyDragAndResize(win, dragHeader);
 }
 
 function renderBettyModeUI() {
   document.querySelectorAll(".betty-mode-btn").forEach((b) => {
-    b.classList.toggle("active", b.dataset.mode === bettyMode);
+    const isActive = b.dataset.mode === bettyMode;
+    b.classList.toggle("active", isActive);
+    b.setAttribute("aria-selected", isActive ? "true" : "false");
   });
 
   const subStatus = document.getElementById("bettySubStatus");
   const input = document.getElementById("bettyInput");
   if (bettyMode === "tech_support") {
-    subStatus.textContent = "מצב פעיל: 🛠️ תמיכה טכנית והדרכה על המערכת";
+    subStatus.textContent = "מצב פעיל: תמיכה טכנית והדרכה על המערכת";
     input.placeholder = "שאל את בטי איך האפליקציה עובדת, מה קורה בכל שלב או איך לתפעל...";
   } else {
-    subStatus.textContent = "מצב פעיל: 🧠 יועצת הנדסת פרומפטים (Master Architect V5)";
+    subStatus.innerHTML = `מצב פעיל: יועצת הנדסת פרומפטים (<code class="tech-token" dir="ltr">Master Architect V5</code>)`;
     input.placeholder = "התייעץ עם בטי על ארכיטקטורת הבוט, פרומפטים, מודולים קוגניטיביים...";
   }
 
-  // Render quick chips (clicking populates input box for user editing/sending)
+  // Render quick chips
   const chipsContainer = document.getElementById("bettyQuickChips");
   chipsContainer.innerHTML = "";
   (BETTY_QUICK_SUGGESTIONS[bettyMode] || []).forEach((q) => {
@@ -907,11 +1285,11 @@ function renderBettyMessages() {
     meta.className = "betty-msg-meta";
     const sender =
       msg.role === "user"
-        ? "👤 אתה"
+        ? `${ICONS.user} <span>אתה</span>`
         : bettyMode === "tech_support"
-        ? "🛠️ בטי — תמיכה טכנית"
-        : "🧠 בטי — Prompt Advisor V5";
-    meta.innerHTML = `<strong>${sender}</strong><span>${escapeHtml(msg.timestamp || "")}</span>`;
+        ? `${ICONS.wrench} <span>בטי — תמיכה טכנית</span>`
+        : `${ICONS.layers} <span>בטי — <code class="tech-token" dir="ltr">Prompt Advisor V5</code></span>`;
+    meta.innerHTML = `<strong style="display:inline-flex;align-items:center;gap:5px;">${sender}</strong><span class="tl-time">${escapeHtml(msg.timestamp || "")}</span>`;
     div.appendChild(meta);
 
     const body = document.createElement("div");
@@ -923,7 +1301,7 @@ function renderBettyMessages() {
       const details = document.createElement("details");
       details.className = "thought-drawer";
       const summary = document.createElement("summary");
-      summary.textContent = "🧠 תהליך חשיבה סמוי (ToT & CoVe <thought_process>)";
+      summary.innerHTML = `${ICONS.cpu} <span>תהליך חשיבה סמוי (<code class="tech-token" dir="ltr">ToT &amp; CoVe &lt;thought_process&gt;</code>)</span>`;
       const pre = document.createElement("pre");
       pre.dir = "ltr";
       pre.textContent = msg.thought;
@@ -948,10 +1326,10 @@ async function sendBettyMessage(text) {
   input.value = "";
   sendBtn.disabled = true;
   thinking.classList.remove("hidden");
-  thinkingText.textContent =
+  thinkingText.innerHTML =
     bettyMode === "tech_support"
       ? "בטי בודקת את מפרט המערכת ומצב הסשן..."
-      : "בטי מבצעת ניתוח Tree of Thoughts ו-CoVe...";
+      : `בטי מבצעת ניתוח <code class="tech-token" dir="ltr">Tree of Thoughts</code> ו-<code class="tech-token" dir="ltr">CoVe</code>...`;
 
   const now = new Date().toTimeString().slice(0, 8);
   bettyHistories[bettyMode].push({
@@ -982,7 +1360,7 @@ async function sendBettyMessage(text) {
       id: String(Date.now()),
       role: "assistant",
       mode: bettyMode,
-      text: `⚠️ שגיאת תקשורת: ${err.message}`,
+      text: `שגיאת תקשורת: ${err.message}`,
       timestamp: now,
     });
   } finally {
@@ -996,7 +1374,6 @@ async function sendBettyMessage(text) {
 
 function formatRichBettyMarkdown(text) {
   if (!text) return "";
-  // Support markdown tables (for Trade-off Matrix) + bold + code blocks
   const lines = text.split("\n");
   let htmlLines = [];
   let inTable = false;
@@ -1010,7 +1387,7 @@ function formatRichBettyMarkdown(text) {
         .split("|")
         .map((c) => c.trim())
         .filter((c, i, arr) => !(i === 0 && c === "") && !(i === arr.length - 1 && c === ""));
-      if (cells.every((c) => /^[-:]+$/.test(c))) return; // separator line
+      if (cells.every((c) => /^[-:]+$/.test(c))) return;
       const tag = rIdx === 0 ? "th" : "td";
       tbl +=
         "<tr>" +
@@ -1054,7 +1431,13 @@ function setupBettyDragAndResize(win, header) {
   }
 
   header.addEventListener("mousedown", (e) => {
-    if (e.target.closest("button") || win.classList.contains("maximized")) return;
+    if (
+      e.target.closest("button") ||
+      win.classList.contains("maximized") ||
+      win.classList.contains("docked")
+    ) {
+      return;
+    }
     ensureAbsolutePosition();
     isDragging = true;
     startX = e.clientX;
@@ -1072,7 +1455,7 @@ function setupBettyDragAndResize(win, header) {
 
   win.querySelectorAll(".betty-resize-handle").forEach((handle) => {
     handle.addEventListener("mousedown", (e) => {
-      if (win.classList.contains("maximized")) return;
+      if (win.classList.contains("maximized") || win.classList.contains("docked")) return;
       e.stopPropagation();
       ensureAbsolutePosition();
       isResizing = true;
@@ -1102,7 +1485,7 @@ function setupBettyDragAndResize(win, header) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       const minW = 340;
-      const minH = 400;
+      const minH = 380;
 
       let newW = startW;
       let newH = startH;
