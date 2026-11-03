@@ -1,0 +1,14 @@
+# Environment & Secrets
+.env
+venv/
+.venv/
+
+# Python Cache & Build
+__pycache__/
+*.py[cod]
+*$py.class
+.mypy_cache/
+
+# Unrelated / Temp Data
+saurus_data/
+קבצים/
