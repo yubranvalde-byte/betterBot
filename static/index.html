@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BetterBot — מפעל הבינה | The Intelligence Factory</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <!-- Background Ambient Canvas / Glows -->
+  <div class="ambient-bg">
+    <div class="glow-orb orb-1"></div>
+    <div class="glow-orb orb-2"></div>
+    <div class="glow-orb orb-3"></div>
+    <div class="grid-overlay"></div>
+  </div>
+
+  <!-- Top Navigation Header -->
+  <header class="top-header">
+    <div class="brand-area">
+      <div class="logo-mark">
+        <svg viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="3" y="3" width="34" height="34" rx="10" stroke="url(#logoGrad)" stroke-width="2.5" fill="rgba(15, 23, 42, 0.85)"/>
+          <circle cx="14" cy="15" r="3" fill="#38bdf8"/>
+          <circle cx="26" cy="15" r="3" fill="#a855f7"/>
+          <circle cx="20" cy="26" r="3" fill="#10b981"/>
+          <path d="M14 15L26 15L20 26Z" stroke="url(#logoGrad)" stroke-width="1.8" stroke-dasharray="2 2"/>
+          <defs>
+            <linearGradient id="logoGrad" x1="0" y1="0" x2="40" y2="40" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#38bdf8"/>
+              <stop offset="50%" stop-color="#818cf8"/>
+              <stop offset="100%" stop-color="#10b981"/>
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+      <div class="brand-titles">
+        <div class="brand-name-row">
+          <h1>BetterBot</h1>
+          <span class="brand-tag">THE INTELLIGENCE FACTORY</span>
+        </div>
+        <p class="brand-subtitle">מפעל רב-סוכנים אוטונומי להנדסת פרומפטים וארכיטקטורת AI</p>
+      </div>
+    </div>
+
+    <div class="header-controls">
+      <div class="status-pill" id="modelBadge" title="מודל שפה פעיל">
+        <span class="pulse-dot"></span>
+        <span class="mono-text" id="modelNameText">gemini-3.5-flash-lite</span>
+      </div>
+
+      <div class="session-selector-wrap">
+        <select id="sessionSelect" class="session-select" aria-label="בחירת סשן"></select>
+        <button id="newSessionBtn" class="btn btn-primary" title="פתח סשן חדש">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>סוכן חדש</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Live Graphical LangGraph Pipeline Bar -->
+  <section class="pipeline-banner" aria-label="מפת זרימת הסוכנים">
+    <div class="pipeline-header-bar">
+      <div class="pipeline-status-info">
+        <span class="stage-indicator" id="globalStageBadge">מוכן להפעלה</span>
+        <span class="stage-description" id="globalStageDesc">ממתין לתיאור הסוכן הראשוני מהמשתמש</span>
+      </div>
+      <div class="circuit-breaker-meter">
+        <span class="cb-label">איטרציות QA (Circuit Breaker):</span>
+        <div class="cb-dots" id="cbDots">
+          <span class="cb-dot" data-idx="1"></span>
+          <span class="cb-dot" data-idx="2"></span>
+          <span class="cb-dot" data-idx="3"></span>
+        </div>
+        <span class="cb-count mono-text" id="iterationBadge">0 / 3</span>
+      </div>
+    </div>
+
+    <div class="pipeline-graph">
+      <!-- Node 1: The Helper -->
+      <div class="agent-node" id="graph-node_1_helper" data-node="node_1_helper">
+        <div class="node-icon-wrap">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span class="node-num">1</span>
+        </div>
+        <div class="node-meta">
+          <div class="node-title">The Helper</div>
+          <div class="node-role">ארכיטקט דרישות וראיון</div>
+        </div>
+        <div class="node-state-badge" id="badge-node_1_helper">המתנה</div>
+      </div>
+
+      <!-- Connector 1 -> 2 -->
+      <div class="graph-connector" id="conn-1-2">
+        <div class="connector-line"></div>
+        <span class="connector-tag mono-text">&lt;GEM_BLUEPRINT&gt;</span>
+      </div>
+
+      <!-- Node 2: The Construct -->
+      <div class="agent-node" id="graph-node_2_construct" data-node="node_2_construct">
+        <div class="node-icon-wrap">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          <span class="node-num">2</span>
+        </div>
+        <div class="node-meta">
+          <div class="node-title">The Construct</div>
+          <div class="node-role">מהדר הפרומפטים</div>
+        </div>
+        <div class="node-state-badge" id="badge-node_2_construct">המתנה</div>
+      </div>
+
+      <!-- Connector 2 -> 4 -->
+      <div class="graph-connector" id="conn-2-4">
+        <div class="connector-line"></div>
+        <span class="connector-tag mono-text">Challenger</span>
+      </div>
+
+      <!-- Node 4: The Adjudicator -->
+      <div class="agent-node" id="graph-node_4_adjudicator" data-node="node_4_adjudicator">
+        <div class="node-icon-wrap">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <polyline points="9 12 11 14 15 10"/>
+          </svg>
+          <span class="node-num">4</span>
+        </div>
+        <div class="node-meta">
+          <div class="node-title">The Adjudicator</div>
+          <div class="node-role">בקרת איכות ורגרסיה</div>
+        </div>
+        <div class="node-state-badge" id="badge-node_4_adjudicator">המתנה</div>
+      </div>
+
+      <!-- Connector 4 <-> 3 -->
+      <div class="graph-connector loop-connector" id="conn-4-3">
+        <div class="connector-line"></div>
+        <span class="connector-tag mono-text">Hill Climbing ↺</span>
+      </div>
+
+      <!-- Node 3: The Upgrader -->
+      <div class="agent-node" id="graph-node_3_upgrader" data-node="node_3_upgrader">
+        <div class="node-icon-wrap">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20h9"/>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          <span class="node-num">3</span>
+        </div>
+        <div class="node-meta">
+          <div class="node-title">The Upgrader</div>
+          <div class="node-role">עורך אטומי ומשדרג</div>
+        </div>
+        <div class="node-state-badge" id="badge-node_3_upgrader">המתנה</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Dual-Pane Workspace -->
+  <main class="workspace-grid">
+    <!-- RIGHT PANE: Interview & Agent Control Chat -->
+    <section class="panel chat-panel">
+      <div class="panel-header">
+        <div class="panel-title-group">
+          <span class="panel-icon">💬</span>
+          <div>
+            <h2>זירת האפיון והראיון</h2>
+            <p id="chatSubheader">שיחה אינטראקטיבית עם The Helper לבניית תוכנית האב</p>
+          </div>
+        </div>
+        <span class="mode-badge" id="inputModeBadge">מצב ראיון</span>
+      </div>
+
+      <!-- Quick Presets Banner (Shown when session is fresh) -->
+      <div class="presets-container" id="presetsContainer">
+        <div class="presets-label">✨ התחלה מהירה — לחץ על הצעה כדי להעתיק אותה לתיבת הטקסט לעריכה ושליחה:</div>
+        <div class="presets-grid">
+          <button class="preset-card" data-prompt="אני רוצה לבנות בוט שעוזר לכתוב ולנסח מיילים עסקיים באנגלית ברמה של מנהלים בכירים בהייטק, מנקודות קצרות בעברית.">
+            <span class="preset-emoji">✉️</span>
+            <div class="preset-text">
+              <strong>ארכיטקט מיילים עסקיים</strong>
+              <span>ניסוח מיילים באנגלית עסקית מנקודות בעברית</span>
+            </div>
+          </button>
+          <button class="preset-card" data-prompt="אני רוצה לבנות מנטור קוד בפייתון ובדיקות תוכנה שעובר על קוד, מוצא באגים ובעיות ביצועים, ומסביר בצורה לימודית בלי לתת סתם קוד מוכן מראש.">
+            <span class="preset-emoji">🐍</span>
+            <div class="preset-text">
+              <strong>מנטור קוד ו-Code Review</strong>
+              <span>סוקר קוד פייתון ומדריך בלי לחלק פתרונות כפית</span>
+            </div>
+          </button>
+          <button class="preset-card" data-prompt="אני רוצה לבנות אנליסט אסטרטגי ומחקר שוק שמנתח רעיונות לסטארטאפים, בודק היתכנות עסקית, מזהה סיכונים ומציג ניתוח SWOT מובנה.">
+            <span class="preset-emoji">📊</span>
+            <div class="preset-text">
+              <strong>אנליסט אסטרטגיה וסטארטאפים</strong>
+              <span>בדיקת היתכנות עסקית, סיכונים וניתוח שוק</span>
+            </div>
+          </button>
+          <button class="preset-card" data-prompt="אני רוצה לבנות סוכן תמיכה טכנית אמפתי ומדויק לאפליקציית SaaS, שמאבחן תקלות צעד אחר צעד ומרגיע לקוחות מתוסכלים.">
+            <span class="preset-emoji">🎧</span>
+            <div class="preset-text">
+              <strong>מומחה תמיכה ושירות SaaS</strong>
+              <span>אבחון תקלות מובנה בשילוב אינטליגנציה רגשית</span>
+            </div>
+          </button>
+        </div>
+      </div>
+
+      <!-- Chat Messages Scroll Area -->
+      <div class="chat-messages" id="chatMessages"></div>
+
+      <!-- Live Thinking / Active Agent Banner -->
+      <div class="active-execution-bar hidden" id="activeExecutionBar">
+        <div class="spinner-ring"></div>
+        <div class="exec-texts">
+          <strong id="execNodeTitle">Node 1: The Helper</strong>
+          <span id="execNodeDesc">מעבד נתונים...</span>
+        </div>
+      </div>
+
+      <!-- Chat / Override Input Form -->
+      <form class="chat-input-area" id="chatForm">
+        <div class="override-banner hidden" id="overrideNotice">
+          <span>⚡ <strong>מצב הנחיה ישירה ל-Upgrader:</strong> כל הוראה שתכתוב כאן תועבר לעריכה אטומית של ה-XML והפרומפט ותיבדק מחדש ב-QA.</span>
+        </div>
+        <div class="input-row">
+          <textarea
+            id="userInput"
+            rows="2"
+            placeholder="תאר את הבוט שאתה רוצה לבנות או ענה לשאלות הארכיטקט... (Enter לשליחה, Shift+Enter לשורה חדשה)"
+            required
+          ></textarea>
+          <button type="submit" id="sendBtn" class="btn btn-send" title="שלח הודעה">
+            <span>שלח</span>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </form>
+    </section>
+
+    <!-- LEFT PANE: Artifacts, XML Blueprint, QA & Live Logs -->
+    <section class="panel artifacts-panel">
+      <div class="tabs-header">
+        <button class="tab-btn active" data-tab="promptTab">
+          <span>🎯 פרומפט המערכת</span>
+          <span class="tab-pill" id="promptStatusPill">טיוטה</span>
+        </button>
+        <button class="tab-btn" data-tab="blueprintTab">
+          <span>🧬 XML Blueprint</span>
+        </button>
+        <button class="tab-btn" data-tab="qaTab">
+          <span>🛡️ בקרת איכות (QA)</span>
+          <span class="tab-pill" id="qaCountPill">0</span>
+        </button>
+        <button class="tab-btn" data-tab="timelineTab">
+          <span>⚡ יומן ריצה חי</span>
+        </button>
+      </div>
+
+      <!-- TAB 1: System Prompt Output -->
+      <div class="tab-content active" id="promptTab">
+        <div class="artifact-toolbar">
+          <div class="artifact-stats">
+            <span id="promptVersionTag" class="badge badge-neutral">ממתין להידור</span>
+            <span id="promptStatsText" class="mono-text stat-muted">0 תווים</span>
+          </div>
+          <div class="artifact-actions">
+            <button id="toggleRawPromptBtn" class="btn btn-ghost btn-sm" title="החלף תצוגה">תצוגת קוד גולמי</button>
+            <button id="copyPromptBtn" class="btn btn-secondary btn-sm" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span>העתק פרומפט</span>
+            </button>
+            <button id="downloadPromptBtn" class="btn btn-primary btn-sm" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>הורד .MD</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="artifact-body" id="promptViewerArea">
+          <div class="empty-state" id="promptEmptyState">
+            <div class="empty-illustration">
+              <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                <polyline points="2 17 12 22 22 17"></polyline>
+                <polyline points="2 12 12 17 22 12"></polyline>
+              </svg>
+            </div>
+            <h3>פרומפט המערכת יופיע כאן</h3>
+            <p>לאחר סיום הראיון הקצר עם <strong>The Helper</strong>, המהדר (<strong>The Construct</strong>) יבנה כאן את פרומפט המערכת המלא ויעביר אותו בדיקות QA אוטומטיות.</p>
+          </div>
+
+          <div id="promptDisplayContainer" class="hidden">
+            <details class="comp-check-box hidden" id="compilationCheckBox">
+              <summary>🔍 בדיקת אימות עצמית של המהדר (&lt;compilation_check&gt;)</summary>
+              <pre id="compilationCheckContent" dir="ltr" class="mono-block"></pre>
+            </details>
+            <div id="promptFormattedView" dir="ltr" class="markdown-body"></div>
+            <pre id="promptRawView" dir="ltr" class="code-viewer hidden"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 2: XML Blueprint -->
+      <div class="tab-content" id="blueprintTab">
+        <div class="artifact-toolbar">
+          <div class="artifact-stats">
+            <span class="badge badge-info">&lt;GEM_BLUEPRINT&gt;</span>
+            <span id="bpVersionText" class="mono-text stat-muted">V1.0</span>
+          </div>
+          <div class="artifact-actions">
+            <button id="copyXmlBtn" class="btn btn-secondary btn-sm" disabled>העתק XML</button>
+          </div>
+        </div>
+
+        <div class="artifact-body">
+          <div class="empty-state" id="blueprintEmptyState">
+            <div class="empty-illustration">🧬</div>
+            <h3>תוכנית האב (XML Blueprint) טרם הופקה</h3>
+            <p>השלם את שאלות המיקוד בראיון (עד 3–4 סבבים) כדי לחלץ את המודולים הקוגניטיביים וחוקי הפעולה.</p>
+          </div>
+
+          <div id="blueprintContainer" class="hidden">
+            <div class="bp-cards-grid" id="bpCardsGrid"></div>
+            <div class="xml-code-section">
+              <div class="section-caption">קוד XML מלא (System Blueprint):</div>
+              <pre id="xmlRawViewer" dir="ltr" class="code-viewer xml-viewer"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 3: QA & Champion vs Challenger -->
+      <div class="tab-content" id="qaTab">
+        <div class="artifact-body">
+          <div class="qa-summary-header">
+            <div>
+              <h3>יומן ביקורת איכות ו-Hill Climbing</h3>
+              <p>מעקב אחר החלטות ה-Adjudicator (Baseline & Regression QA) והשוואת גרסאות</p>
+            </div>
+          </div>
+
+          <div id="qaLogsList" class="qa-logs-list">
+            <div class="empty-state">
+              <div class="empty-illustration">🛡️</div>
+              <h3>טרם בוצעו סבבי QA</h3>
+              <p>ברגע שיופק פרומפט ראשוני, ה-Adjudicator יבצע ביקורת איכות קפדנית ויציג כאן את הממצאים.</p>
+            </div>
+          </div>
+
+          <div id="diffComparisonSection" class="diff-section hidden">
+            <h4>השוואת Champion (מאושר) מול Challenger (מועמד אחרון)</h4>
+            <div class="diff-grid" dir="ltr">
+              <div class="diff-col">
+                <div class="diff-col-header champion-header">🏆 Champion Prompt</div>
+                <pre id="diffChampionPre" class="code-viewer compact-pre"></pre>
+              </div>
+              <div class="diff-col">
+                <div class="diff-col-header challenger-header">⚡ Challenger Prompt</div>
+                <pre id="diffChallengerPre" class="code-viewer compact-pre"></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TAB 4: Live Factory Timeline -->
+      <div class="tab-content" id="timelineTab">
+        <div class="artifact-body">
+          <div class="timeline-list" id="timelineList"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==========================================
+       BETTY (בטי) — Floating Bubble & Draggable/Resizable Chat Window
+       ========================================== -->
+  <button id="bettyFab" class="betty-fab" title="שאל את בטי — העוזרת והיועצת של BetterBot">
+    <div class="betty-fab-avatar">
+      <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="18" cy="18" r="16" fill="url(#bettyGrad)" />
+        <path d="M11 16C11 12.6863 13.6863 10 17 10H19C22.3137 10 25 12.6863 25 16V19C25 22.3137 22.3137 25 19 25H15L11 28V16Z" fill="rgba(15,23,42,0.9)"/>
+        <circle cx="15.5" cy="17.5" r="1.6" fill="#38bdf8"/>
+        <circle cx="20.5" cy="17.5" r="1.6" fill="#a855f7"/>
+        <defs>
+          <linearGradient id="bettyGrad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="#38bdf8"/>
+            <stop offset="50%" stop-color="#818cf8"/>
+            <stop offset="100%" stop-color="#c084fc"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <span class="betty-online-dot"></span>
+    </div>
+    <div class="betty-fab-label">
+      <strong>בטי (Betty)</strong>
+      <span>עוזרת ויועצת AI</span>
+    </div>
+  </button>
+
+  <aside id="bettyWindow" class="betty-window hidden" aria-label="חלון הצ'אט של בטי">
+    <!-- 8-Direction Resize Handles for smooth enlarging/shrinking from any edge or corner -->
+    <div class="betty-resize-handle handle-nw" data-resize="nw" title="שנה גודל"></div>
+    <div class="betty-resize-handle handle-ne" data-resize="ne" title="שנה גודל"></div>
+    <div class="betty-resize-handle handle-sw" data-resize="sw" title="שנה גודל"></div>
+    <div class="betty-resize-handle handle-se" data-resize="se" title="שנה גודל"></div>
+    <div class="betty-resize-handle handle-n" data-resize="n"></div>
+    <div class="betty-resize-handle handle-s" data-resize="s"></div>
+    <div class="betty-resize-handle handle-e" data-resize="e"></div>
+    <div class="betty-resize-handle handle-w" data-resize="w"></div>
+
+    <!-- Draggable Title Bar -->
+    <div class="betty-header" id="bettyDragHeader">
+      <div class="betty-header-right">
+        <div class="betty-mini-avatar">✨</div>
+        <div class="betty-header-titles">
+          <div class="betty-title-row">
+            <strong>בטי (Betty)</strong>
+            <span class="betty-drag-hint">ניתן לגרירה ולשינוי גודל</span>
+          </div>
+          <span id="bettySubStatus">מומחית המערכת ויועצת הנדסת פרומפטים</span>
+        </div>
+      </div>
+      <div class="betty-window-actions">
+        <button type="button" id="bettyClearBtn" class="betty-icon-btn" title="נקה שיחה במצב הנוכחי">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+          </svg>
+        </button>
+        <button type="button" id="bettyMaximizeBtn" class="betty-icon-btn" title="הגדל / הקטן חלון">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="15 3 21 3 21 9"></polyline>
+            <polyline points="9 21 3 21 3 15"></polyline>
+            <line x1="21" y1="3" x2="14" y2="10"></line>
+            <line x1="3" y1="21" x2="10" y2="14"></line>
+          </svg>
+        </button>
+        <button type="button" id="bettyCloseBtn" class="betty-icon-btn" title="מזער לבועה">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Dual Mode Switcher -->
+    <div class="betty-mode-switcher">
+      <button type="button" class="betty-mode-btn active" data-mode="tech_support">
+        <span class="mode-icon">🛠️</span>
+        <div class="mode-btn-texts">
+          <strong>תמיכה טכנית</strong>
+          <span>איך המערכת עובדת והדרכה</span>
+        </div>
+      </button>
+      <button type="button" class="betty-mode-btn" data-mode="prompt_advisor">
+        <span class="mode-icon">🧠</span>
+        <div class="mode-btn-texts">
+          <strong>Prompt Engineering Advisor</strong>
+          <span>ייעוץ ארכיטקטוני ובניית בוטים</span>
+        </div>
+      </button>
+    </div>
+
+    <!-- Quick Questions Bar for Betty -->
+    <div class="betty-quick-chips" id="bettyQuickChips"></div>
+
+    <!-- Betty Chat Messages -->
+    <div class="betty-messages" id="bettyMessages"></div>
+
+    <!-- Betty Thinking Indicator -->
+    <div class="betty-thinking hidden" id="bettyThinking">
+      <div class="spinner-ring spinner-sm"></div>
+      <span id="bettyThinkingText">בטי מנתחת ומגבשת תשובה...</span>
+    </div>
+
+    <!-- Betty Input Form -->
+    <form class="betty-input-bar" id="bettyForm">
+      <textarea
+        id="bettyInput"
+        rows="2"
+        placeholder="שאל את בטי כל שאלה... (Enter לשליחה, Shift+Enter לשורה חדשה)"
+        required
+      ></textarea>
+      <button type="submit" id="bettySendBtn" class="btn btn-primary betty-send-btn">
+        <span>שלח</span>
+      </button>
+    </form>
+  </aside>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
