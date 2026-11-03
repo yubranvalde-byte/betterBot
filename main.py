@@ -43,7 +43,7 @@ class FactoryState(TypedDict):
 
 # אתחול מודל השפה. ודא שמשתנה הסביבה GOOGLE_API_KEY מוגדר במערכת שלך.
 # אנו מגדירים temperature=0 כדי למקסם דטרמיניסטיות.
-llm = ChatGoogleGenerativeAI(model="gemini-3.1-pro-preview", temperature=0)
+llm = ChatGoogleGenerativeAI(model="gemini-3.5-flash-lite", temperature=0)
 
 
 # def node_helper(state: FactoryState):
