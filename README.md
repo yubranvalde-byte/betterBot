@@ -135,6 +135,20 @@ GOOGLE_API_KEY=your_actual_google_api_key_here
 
 *(לחלופין, ניתן להריץ את המערכת גם במצב טרמינל CLI קלאסי באמצעות `.\venv\Scripts\python.exe main.py`).*
 
+### 5. פריסה לענן (Cloud Deployment via Render)
+הפרויקט מותאם במלואו להעלאה כ-**Web Service** ב-[Render](https://render.com) (כולל קובץ Blueprint מובנה `render.yaml`):
+* **Build Command:**
+  ```bash
+  pip install -r requirements.txt
+  ```
+* **Start Command:**
+  ```bash
+  uvicorn server:app --host 0.0.0.0 --port $PORT
+  ```
+* **Environment Variables (בלוח הבקרה של Render):**
+  * `GOOGLE_API_KEY`: מפתח ה-API של Google Gemini.
+  * `PYTHON_VERSION`: `3.11.9`
+
 ---
 
 ## 📂 מבנה הקוד והפרויקט (Project Structure)
@@ -148,7 +162,8 @@ BetterBot/
 │   ├── index.html       # מבנה הממשק הדו-חלוני, מפת הסוכנים והחלון הצף של בטי
 │   ├── styles.css       # עיצוב Cyber/Dark עתידני, אנימציות צמתים, פסי גלילה מותאמים ורספונסיביות
 │   └── app.js           # לוגיקת ה-Client: האזנה ל-SSE, ניהול לשוניות, גרירה/שינוי גודל וצ'אט בטי
-├── requirements.txt     # רשימת כל חבילות ה-Python והגרסאות המדויקות שלהן
+├── requirements.txt     # רשימת כל חבילות ה-Python והגרסאות המדויקות שלהן (UTF-8 נקי)
+├── render.yaml          # קובץ תצורה (Blueprint) לפריסה אוטומטית ב-Render
 ├── fronter.txt          # מסמך האפיון המקורי למעבר מ-CLI ל-Client-Server
 ├── .env                 # משתני סביבה (GOOGLE_API_KEY) - מוחרג מ-Git
 ├── .gitignore           # הגדרות קבצים ותיקיות מוחרגים מבקרת גרסאות
