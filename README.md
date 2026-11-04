@@ -140,8 +140,14 @@ GOOGLE_API_KEY=your_actual_google_api_key_here
 
 *(לחלופין, ניתן להריץ את המערכת גם במצב טרמינל CLI קלאסי באמצעות `.\venv\Scripts\python.exe main.py`).*
 
-### 5. פריסה לענן (Cloud Deployment via Render)
-הפרויקט מותאם במלואו להעלאה כ-**Web Service** ב-[Render](https://render.com) (כולל קובץ Blueprint מובנה `render.yaml`):
+### 5. פריסה לענן ועמידות סשנים (Cloud Deployment & Session Resilience via Render)
+הפרויקט מותאם במלואו להעלאה כ-**Web Service** ב-[Render](https://render.com) (כולל קובץ Blueprint מובנה `render.yaml` עם `healthCheckPath: /api/health`):
+* **התאוששות סשנים אוטומטית (Zero-404 Session Auto-Recovery & Snapshot Persistence):**
+  * השרת שומר גיבוי אוטומטי של כלל הסשנים הפעילים לקובץ Snapshot מקומי (`betterbot_sessions_snapshot.json`) וטוען אותו בעת עליית השרת.
+  * במידה וקונטיינר ה-Free Tier של Render נכבה לאחר חוסר פעילות או מופעל מחדש בעוד לשונית הדפדפן של המשתמש פתוחה עם `session_id` קודם, השרת משחזר או יוצר אוטומטית את הסשן המבוקש בזמן אמת (ב-`POST /api/sessions/{session_id}/stream` וב-`GET /api/sessions/{session_id}`) במקום להחזיר שגיאת `404 Not Found`.
+* **תמיכה בבדיקות תקינות (`HEAD` & `GET`) ו-Keep-Alive:**
+  * נתיבי `/` ו-`/api/health` תומכים בבקשות `GET` ו-`HEAD` עבור ה-Load Balancer של Render (ללא שגיאות `405 Method Not Allowed`).
+  * ה-Frontend שולח פעימת Keep-Alive שקטה ל-`/api/health` כל 4 דקות כל עוד הלשונית פתוחה, ומוסיף כותרות `Cache-Control: no-cache, no-store, must-revalidate` לקבצים הסטטיים להבטחת טעינה מיידית של עדכוני ממשק (`v3.1`).
 * **Build Command:**
   ```bash
   pip install -r requirements.txt

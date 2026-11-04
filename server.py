@@ -4,11 +4,12 @@ import json
 import uuid
 import time
 import asyncio
+import tempfile
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,10 +47,45 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ==========================================
-# In-Memory Session Store (RAM Only per Spec)
+# Session Store (In-Memory + Local Disk Snapshot Backup)
 # ==========================================
 SESSIONS: Dict[str, Dict[str, Any]] = {}
+STORE_SNAPSHOT_FILE = Path(tempfile.gettempdir()) / "betterbot_sessions_snapshot.json"
+
+
+def save_sessions_snapshot() -> None:
+    try:
+        STORE_SNAPSHOT_FILE.write_text(
+            json.dumps(SESSIONS, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
+def load_sessions_snapshot() -> None:
+    try:
+        if STORE_SNAPSHOT_FILE.exists():
+            data = json.loads(STORE_SNAPSHOT_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                SESSIONS.update(data)
+    except Exception:
+        pass
+
+
+load_sessions_snapshot()
 
 
 class UserMessageRequest(BaseModel):
@@ -148,8 +184,10 @@ def parse_blueprint_tags(xml_str: str) -> Dict[str, str]:
     return parsed
 
 
-def create_new_session(title: str = "סשן חדש") -> Dict[str, Any]:
-    session_id = str(uuid.uuid4())[:8]
+def create_new_session(
+    title: str = "סשן חדש", session_id: Optional[str] = None
+) -> Dict[str, Any]:
+    session_id = session_id or str(uuid.uuid4())[:8]
     now = datetime.now().strftime("%H:%M:%S")
     state: FactoryState = {
         "user_input": "",
@@ -194,6 +232,7 @@ def create_new_session(title: str = "סשן חדש") -> Dict[str, Any]:
         ],
     }
     SESSIONS[session_id] = session
+    save_sessions_snapshot()
     return session
 
 
@@ -235,7 +274,7 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
 # ==========================================
 # Endpoints
 # ==========================================
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_index():
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
@@ -243,7 +282,7 @@ async def serve_index():
     return HTMLResponse(index_file.read_text(encoding="utf-8"))
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health_check():
     return {
         "status": "ok",
@@ -278,7 +317,7 @@ async def create_session_endpoint():
 @app.get("/api/sessions/{session_id}")
 async def get_session_endpoint(session_id: str):
     if session_id not in SESSIONS:
-        raise HTTPException(status_code=404, detail="Session not found")
+        create_new_session(session_id=session_id)
     return enrich_session(SESSIONS[session_id])
 
 
@@ -286,6 +325,7 @@ async def get_session_endpoint(session_id: str):
 async def delete_session_endpoint(session_id: str):
     if session_id in SESSIONS:
         del SESSIONS[session_id]
+        save_sessions_snapshot()
     return {"deleted": True}
 
 
@@ -296,7 +336,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
     so the UI can animate each node (Helper -> Construct -> Adjudicator <-> Upgrader).
     """
     if session_id not in SESSIONS:
-        raise HTTPException(status_code=404, detail="Session not found")
+        create_new_session(session_id=session_id)
 
     session = SESSIONS[session_id]
     user_msg = req.message.strip()
@@ -554,6 +594,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                 else:
                     break
 
+                save_sessions_snapshot()
                 yield sse(
                     "node_complete",
                     {
@@ -598,6 +639,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
             else:
                 session["status"] = "interviewing"
 
+            save_sessions_snapshot()
             yield sse("done", enrich_session(session))
 
         except Exception as exc:
@@ -613,6 +655,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                     "status": "danger",
                 }
             )
+            save_sessions_snapshot()
             yield sse("error", {"error": err_msg, "session": enrich_session(session)})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

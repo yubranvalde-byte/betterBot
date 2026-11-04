@@ -126,6 +126,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   initBettyWidget();
   await checkHealth();
   await initSession();
+  // Keep-Alive heartbeat every 4 minutes so Render free-tier containers stay warm while open
+  setInterval(checkHealth, 4 * 60 * 1000);
 });
 
 async function checkHealth() {
@@ -411,11 +413,22 @@ async function sendUserMessage(messageText) {
   appendOptimisticUserBubble(messageText);
 
   try {
-    const response = await fetch(`/api/sessions/${currentSession.session_id}/stream`, {
+    let response = await fetch(`/api/sessions/${currentSession.session_id}/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: messageText, mode: "auto" }),
     });
+
+    // Auto-recover if server restarted and session ID was evicted
+    if (response.status === 404) {
+      const res = await fetch("/api/sessions", { method: "POST" });
+      currentSession = await res.json();
+      response = await fetch(`/api/sessions/${currentSession.session_id}/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: messageText, mode: "auto" }),
+      });
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -438,6 +451,10 @@ async function sendUserMessage(messageText) {
       }
     }
   } catch (err) {
+    // Restore user's message input so nothing is lost on network failure
+    if (els.userInput && !els.userInput.value) {
+      els.userInput.value = messageText;
+    }
     showToast(`שגיאת תקשורת: ${err.message}`, "alert");
   } finally {
     isStreaming = false;
