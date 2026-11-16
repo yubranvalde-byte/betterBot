@@ -286,7 +286,7 @@ async def serve_index():
 async def health_check():
     return {
         "status": "ok",
-        "model": getattr(main.llm, "model", "gemini-3.5-flash-lite"),
+        "model": getattr(main.llm, "model", "gemini-4-hydrogen"),
         "active_sessions": len(SESSIONS),
     }
 

@@ -689,7 +689,7 @@ BETTY_TECH_SUPPORT_PROMPT = """# System Instructions: Betty (בטי) — Technic
 ## Complete Technical Knowledge of BetterBot (מפעל הבינה)
 
 ### 1. ארכיטקטורת הליבה (LangGraph Multi-Agent Pipeline)
-המערכת בנויה על **LangGraph** ומודל **Google Gemini (`gemini-3.5-flash-lite`)** בטמפרטורה 0 (למקסום דטרמיניסטיות), ופועלת בזיכרון השרת (In-Memory Session State) עם שידור אירועים בזמן אמת (Server-Sent Events - SSE).
+המערכת בנויה על **LangGraph** ומודל **Google Gemini (`gemini-4-hydrogen`)** בטמפרטורה 0 (למקסום דטרמיניסטיות), ופועלת בזיכרון השרת (In-Memory Session State) עם שידור אירועים בזמן אמת (Server-Sent Events - SSE).
 הגרף מורכב מ-4 סוכנים (Nodes) שמעבירים ביניהם אובייקט מצב מרכזי (`FactoryState`):
 
 1. **Node 1 — The Helper (`The Requirements Architect` / ארכיטקט הדרישות):**

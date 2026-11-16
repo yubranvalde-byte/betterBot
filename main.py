@@ -44,7 +44,7 @@ class FactoryState(TypedDict):
 # אתחול מודל השפה. ודא שמשתנה הסביבה GOOGLE_API_KEY מוגדר במערכת שלך.
 # אנו מגדירים temperature=0 כדי למקסם דטרמיניסטיות.
 llm = ChatGoogleGenerativeAI(
-    model="gemini-3.5-flash-lite",
+    model="gemini-4-hydrogen",
     temperature=0,
     google_api_key=os.environ.get("GOOGLE_API_KEY", "MISSING_GOOGLE_API_KEY"),
 )
