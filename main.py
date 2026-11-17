@@ -53,6 +53,7 @@ class FactoryState(TypedDict, total=False):
     reference_files: Annotated[Dict[str, str], replace_value]
     rubric_scores: Annotated[Dict[str, float], replace_value]
     readiness_scores: Annotated[Dict[str, Any], replace_value]
+    is_manual_override: Annotated[bool, replace_value]
 
 
 # ==========================================
@@ -562,6 +563,9 @@ def node_upgrader(state: FactoryState):
         state.get("champion_prompt", ""), state.get("reference_files")
     )
     error_log = state.get("error_log", [])
+    is_override = bool(state.get("is_manual_override")) or bool(
+        error_log and "[MANUAL OVERRIDE]" in error_log[-1]
+    )
 
     formatted_errors = (
         "\n".join(error_log) if error_log else "No specific errors provided."
@@ -591,6 +595,7 @@ def node_upgrader(state: FactoryState):
         "challenger_prompt": primary_prompt,
         "target_type": meta["target_type"],
         "reference_files": merged_refs,
+        "is_manual_override": is_override,
     }
     if meta["slug_name"]:
         update["slug_name"] = meta["slug_name"]
@@ -644,13 +649,29 @@ def node_adjudicator(state: FactoryState):
     champion_prompt = format_artifact_with_references(raw_champion_prompt, ref_files)
     challenger_prompt = format_artifact_with_references(raw_challenger_prompt, ref_files)
     error_log = state.get("error_log", [])
+    is_manual_override = bool(state.get("is_manual_override")) or bool(
+        error_log and str(error_log[-1]).lstrip().startswith("[MANUAL OVERRIDE]")
+    )
+    override_directives = [
+        str(entry)
+        for entry in error_log
+        if str(entry).lstrip().startswith("[MANUAL OVERRIDE]")
+    ]
+    effective_user_input = user_input
+    if override_directives:
+        overrides_block = "\n".join(override_directives)
+        effective_user_input = (
+            f"{user_input}\n\n"
+            f"AUTHORITATIVE USER MANUAL OVERRIDE DIRECTIVES (MUST BE FULFILLED):\n"
+            f"{overrides_block}"
+        )
 
     prev_rubric = state.get("rubric_scores") or {}
     prev_weighted_avg = prev_rubric.get("weighted_average")
 
     # --- Stage A: Quantitative Rubric Evaluation via gemini-decision-1 ---
     eval_context = (
-        f"USER INTENT:\n{user_input}\n\n"
+        f"USER INTENT:\n{effective_user_input}\n\n"
         f"CHALLENGER XML:\n{challenger_xml}\n\n"
         f"CHALLENGER ARTIFACT:\n{challenger_prompt}\n"
     )
@@ -677,26 +698,37 @@ def node_adjudicator(state: FactoryState):
             f"    -> Decision Rubric Avg: {weighted_avg:.2f} | Min Dim: {min_dim_score:.2f}/5.0"
         )
 
-        # --- Stage B (Fast Pass): Skip generative LLM call if quality threshold is met ---
-        if (
-            weighted_avg >= 0.82
+        # --- Stage B (Fast Pass / Post-Override Promotion): Skip generative LLM call if criteria met ---
+        fast_pass_standard = (
+            not is_manual_override
+            and weighted_avg >= 0.82
             and min_dim_score >= 3.0
             and (iteration_count == 0 or beats_champ >= 0.5)
-        ):
-            print("    -> Fast PASS via gemini-decision-1 (0 output tokens used)")
+        )
+        post_override_pass = (
+            is_manual_override
+            and min_dim_score >= 3.0
+            and (weighted_avg >= 0.82 or beats_champ >= 0.5)
+        )
+        if fast_pass_standard or post_override_pass:
+            pass_mode = "Post-override PASS" if post_override_pass else "Fast PASS"
+            print(f"    -> {pass_mode} via gemini-decision-1 (0 output tokens used)")
             return {
                 "iteration_count": iteration_count + 1,
+                "is_manual_override": False,
                 "rubric_scores": rubric_scores,
                 "champion_xml": challenger_xml,
                 "champion_prompt": raw_challenger_prompt,
+                "reference_files": ref_files,
                 "error_log": [
-                    f"[PASS] Fast-approved by gemini-decision-1 (score={weighted_avg:.2f})."
+                    f"[PASS] {pass_mode} by gemini-decision-1 (score={weighted_avg:.2f})."
                 ],
             }
 
-        # --- Stage B (Plateau Breaker): Escalate if improvement stalled ---
+        # --- Stage B (Plateau Breaker): Escalate if improvement stalled (bypassed after manual override) ---
         if (
-            iteration_count >= 1
+            not is_manual_override
+            and iteration_count >= 1
             and prev_weighted_avg is not None
             and (weighted_avg - float(prev_weighted_avg)) < 0.02
         ):
@@ -725,7 +757,7 @@ def node_adjudicator(state: FactoryState):
         chain = prompt | structured_llm
         decision = chain.invoke(
             {
-                "user_input": user_input,
+                "user_input": effective_user_input,
                 "challenger_xml": challenger_xml,
                 "challenger_prompt": challenger_prompt,
                 "decision_rubric_scores": formatted_rubric_scores,
@@ -739,7 +771,7 @@ def node_adjudicator(state: FactoryState):
         chain = prompt | structured_llm
         decision = chain.invoke(
             {
-                "user_input": user_input,
+                "user_input": effective_user_input,
                 "champion_xml": champion_xml,
                 "champion_prompt": champion_prompt,
                 "challenger_xml": challenger_xml,
@@ -754,12 +786,19 @@ def node_adjudicator(state: FactoryState):
 
     state_update: Dict[str, Any] = {
         "iteration_count": iteration_count + 1,
+        "is_manual_override": False,
         "rubric_scores": rubric_scores,
     }
 
-    if decision.status == "PASS" or decision.replace_champion or iteration_count == 0:
+    if (
+        decision.status == "PASS"
+        or decision.replace_champion
+        or is_manual_override
+        or iteration_count == 0
+    ):
         state_update["champion_xml"] = challenger_xml
         state_update["champion_prompt"] = raw_challenger_prompt
+        state_update["reference_files"] = ref_files
 
     if decision.status == "PASS":
         state_update["error_log"] = ["[PASS] System approved."]

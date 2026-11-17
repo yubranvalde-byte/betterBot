@@ -122,15 +122,19 @@ ADJUDICATOR_RUBRIC_QUESTIONS = [
         "max_score": 5,
         "question": (
             "Does the artifact properly apply Progressive Disclosure by keeping the core instructions lean "
-            "and separating heavy templates, schemas, or examples into `references/<filename>.md` when appropriate?"
+            "and separating heavy templates, schemas, or examples into `references/<filename>.md` when appropriate? "
+            "IMPORTANT: If `<PROGRESSIVE_DISCLOSURE_REFS>` is `None` (or auxiliary files are not needed because the artifact "
+            "is a compact behavioral meta-rule or self-contained skill under ~5KB without heavy static templates), "
+            "keeping all instructions self-contained in `SKILL.md` or `SYSTEM_PROMPT` is optimal and MUST score 4–5 "
+            "without penalty for lacking `references/*` files."
         ),
         "rubric": {
             0: "Monolithic wall of text dumping massive raw templates directly into the core instructions.",
             1: "Poor structural separation; mixes high-level SOP rules with bulky static payloads.",
             2: "Some modular structure, but misses obvious opportunities to offload reference material.",
-            3: "Clean sectioning; either self-contained and lean or basic reference separation.",
-            4: "Well-structured modular architecture with clear reference pointers where needed.",
-            5: "Exemplary Progressive Disclosure: ultra-lean core SOP paired with clean `references/` files when appropriate.",
+            3: "Acceptable sectioning, though minor structural separation or conciseness could be improved.",
+            4: "Well-structured modular architecture: either clean `references/` pointers where needed OR a crisp, self-contained compact skill where `<PROGRESSIVE_DISCLOSURE_REFS>` is `None`.",
+            5: "Exemplary Progressive Disclosure: ultra-lean core SOP paired with clean `references/` files when needed, OR an optimal, zero-bloat self-contained compact skill (<5KB / `<PROGRESSIVE_DISCLOSURE_REFS>` is `None`).",
         },
     },
     {
@@ -174,8 +178,9 @@ ADJUDICATOR_RUBRIC_QUESTIONS = [
         "type": "noul",
         "choices": ["Yes", "No"],
         "question": (
-            "In regression iterations, does the Challenger resolve the logged QA defects and achieve higher overall "
-            "architectural quality than the current Champion without introducing regressions?"
+            "In regression or manual override iterations, does the Challenger accurately execute all logged QA directives "
+            "and AUTHORITATIVE USER MANUAL OVERRIDE DIRECTIVES while maintaining or improving overall architectural quality "
+            "compared to the current Champion?"
         ),
     },
 ]
