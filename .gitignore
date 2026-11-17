@@ -12,3 +12,5 @@ __pycache__/
 # Unrelated / Temp Data
 saurus_data/
 קבצים/
+betterbot_history.db*
+betterbot_sessions_snapshot.json

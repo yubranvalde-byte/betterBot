@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Rubik:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=3.2" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.3" />
 </head>
 <body>
   <!-- ==========================================
@@ -53,13 +53,34 @@
 
     <!-- Left (RTL): Session Controls & Betty Push-Panel Toggle -->
     <div class="header-controls">
-      <div class="status-pill" id="modelBadge" title="מודל שפה פעיל">
-        <span class="pulse-dot"></span>
-        <span class="mono-text" id="modelNameText">gemini-4-hydrogen</span>
-      </div>
-
       <div class="session-selector-wrap">
         <select id="sessionSelect" class="session-select" aria-label="בחירת סשן"></select>
+        <div class="history-library-wrap" id="historyLibraryWrap">
+          <button type="button" id="historyLibraryBtn" class="btn btn-secondary history-trigger-btn" title="ספריית היסטוריית יצירות">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 8v4l3 3"></path>
+              <circle cx="12" cy="12" r="9"></circle>
+            </svg>
+            <span>היסטוריה</span>
+            <span class="history-count-badge mono-text" id="historyCountBadge">0</span>
+          </button>
+          <div id="historyLibraryPopover" class="history-popover hidden" role="dialog" aria-label="ספריית היסטוריית יצירות">
+            <div class="history-popover-header">
+              <strong>ספריית היסטוריית יצירות</strong>
+              <span class="stat-muted">נשמר אוטומטית ב-DB</span>
+            </div>
+            <div class="history-search-row">
+              <input type="search" id="historySearchInput" class="history-search-input" placeholder="חפש יצירה לפי שם או סוג..." />
+            </div>
+            <div class="history-filter-bar" id="historyFilterBar">
+              <button type="button" class="history-filter-chip active" data-filter="ALL">הכל</button>
+              <button type="button" class="history-filter-chip" data-filter="SKILL_PACKAGE">SKILL</button>
+              <button type="button" class="history-filter-chip" data-filter="SYSTEM_PROMPT">PROMPT</button>
+              <button type="button" class="history-filter-chip" data-filter="HYBRID_BUNDLE">HYBRID</button>
+            </div>
+            <div class="history-list" id="historyLibraryList"></div>
+          </div>
+        </div>
         <button id="newSessionBtn" class="btn btn-primary" title="פתח סשן חדש">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
             <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -163,6 +184,7 @@
                 <p id="chatSubheader">שיחה אינטראקטיבית עם <code class="tech-token" dir="ltr">The Helper</code> לבניית תוכנית האב</p>
               </div>
             </div>
+            <div id="readinessBarWrap" class="readiness-pill-bar hidden" title="הערכת מוכנות ראיון בזמן אמת (gemini-decision-1)"></div>
           </div>
 
           <!-- Full-Height Scrollable Conversation Area (Presets + Messages) -->
@@ -331,6 +353,8 @@
             <!-- Prompt Toolbar Group -->
             <div class="artifact-toolbar" id="promptToolbarGroup">
               <div class="artifact-stats">
+                <span id="artifactTargetTypeBadge" class="target-type-badge hidden">SYSTEM_PROMPT</span>
+                <span id="artifactSlugBadge" class="badge badge-info hidden"><code class="tech-token" dir="ltr"></code></span>
                 <span id="promptVersionTag" class="badge badge-neutral">ממתין להידור</span>
                 <span id="promptStatsText" class="mono-text stat-muted">0 תווים · ~0 טוקנים</span>
               </div>
@@ -343,7 +367,7 @@
                   </svg>
                   <span>העתק פרומפט</span>
                 </button>
-                <button type="button" id="downloadPromptBtn" class="btn btn-primary btn-sm" disabled>
+                <button type="button" id="downloadPromptBtn" class="btn btn-secondary btn-sm" disabled>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="7 10 12 15 17 10"></polyline>
@@ -351,14 +375,22 @@
                   </svg>
                   <span>הורד .MD</span>
                 </button>
+                <button type="button" id="downloadZipBtn" class="btn btn-primary btn-sm" disabled title="הורד את כל קבצי החבילה בארכיון ZIP">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                  <span>הורד חבילה (.ZIP)</span>
+                </button>
               </div>
             </div>
 
             <!-- Blueprint Toolbar Group -->
             <div class="artifact-toolbar hidden" id="blueprintToolbarGroup">
               <div class="artifact-stats">
-                <span class="badge badge-info"><code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code></span>
-                <span id="bpVersionText" class="mono-text stat-muted">V1.0</span>
+                <span class="badge badge-info"><code class="tech-token" dir="ltr">&lt;ARTIFACT_BLUEPRINT&gt;</code></span>
+                <span id="bpVersionText" class="mono-text stat-muted">V2.0</span>
               </div>
               <div class="artifact-actions">
                 <button type="button" id="copyXmlBtn" class="btn btn-secondary btn-sm" disabled>
@@ -389,6 +421,7 @@
             </div>
 
             <div id="promptDisplayContainer" class="hidden">
+              <div id="artifactFileSwitcher" class="artifact-file-switcher hidden" dir="ltr"></div>
               <details class="comp-check-box hidden" id="compilationCheckBox">
                 <summary>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -478,6 +511,9 @@
         </div>
 
         <div class="artifact-body qa-studio-body" id="qaTab">
+          <!-- Decision 1 Quantitative Rubric Scorecard -->
+          <div id="decisionRubricCard" class="decision-rubric-card hidden"></div>
+
           <!-- Top Strip: Adjudicator QA Verdicts -->
           <div id="qaLogsList" class="qa-logs-list">
             <div class="empty-state">
@@ -800,6 +836,6 @@
   <!-- Toast Notification -->
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js?v=3.1"></script>
+  <script src="/static/app.js?v=3.3"></script>
 </body>
 </html>

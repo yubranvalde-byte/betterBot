@@ -1,37 +1,41 @@
+import asyncio
+import io
+import json
 import os
 import re
-import json
-import uuid
-import time
-import asyncio
 import tempfile
+import time
+import uuid
+import zipfile
 from datetime import datetime
-from typing import Dict, Any, List, Optional
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 import main
+import storage
 from main import (
     FactoryState,
-    node_helper,
-    node_construct,
-    node_upgrader,
+    has_blueprint_xml,
     node_adjudicator,
-    route_from_start,
-    route_from_helper,
+    node_construct,
+    node_helper,
+    node_upgrader,
     route_from_adjudicator,
+    route_from_helper,
+    route_from_start,
 )
-from prompts import BETTY_TECH_SUPPORT_PROMPT, BETTY_PROMPT_ADVISOR_PROMPT
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from prompts import BETTY_PROMPT_ADVISOR_PROMPT, BETTY_TECH_SUPPORT_PROMPT
 
 app = FastAPI(
     title="BetterBot — The Intelligence Factory API",
-    description="Web Backend & Real-time Multi-Agent Orchestrator for BetterBot",
+    description="Web Backend & Real-time Multi-Agent Orchestrator for BetterBot 2.0",
     version="2.0.0",
 )
 
@@ -60,32 +64,40 @@ async def add_no_cache_headers(request: Request, call_next):
 
 
 # ==========================================
-# Session Store (In-Memory + Local Disk Snapshot Backup)
+# Session Store (In-Memory + SQLite Persistent Storage)
 # ==========================================
 SESSIONS: Dict[str, Dict[str, Any]] = {}
-STORE_SNAPSHOT_FILE = Path(tempfile.gettempdir()) / "betterbot_sessions_snapshot.json"
 
 
-def save_sessions_snapshot() -> None:
-    try:
-        STORE_SNAPSHOT_FILE.write_text(
-            json.dumps(SESSIONS, ensure_ascii=False), encoding="utf-8"
-        )
-    except Exception:
-        pass
+def init_storage_and_hydrate() -> None:
+    storage.init_db()
+    for item in storage.list_sessions():
+        sid = item.get("session_id")
+        if sid and sid not in SESSIONS:
+            loaded = storage.load_session(sid)
+            if loaded:
+                SESSIONS[sid] = loaded
 
 
-def load_sessions_snapshot() -> None:
-    try:
-        if STORE_SNAPSHOT_FILE.exists():
-            data = json.loads(STORE_SNAPSHOT_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                SESSIONS.update(data)
-    except Exception:
-        pass
+init_storage_and_hydrate()
 
 
-load_sessions_snapshot()
+def save_session_record(session_id: Optional[str] = None) -> None:
+    if session_id and session_id in SESSIONS:
+        storage.save_session(session_id, SESSIONS[session_id])
+    elif session_id is None:
+        for sid, sess in SESSIONS.items():
+            storage.save_session(sid, sess)
+
+
+def get_or_load_session(session_id: str) -> Optional[Dict[str, Any]]:
+    if session_id in SESSIONS:
+        return SESSIONS[session_id]
+    loaded = storage.load_session(session_id)
+    if loaded:
+        SESSIONS[session_id] = loaded
+        return loaded
+    return None
 
 
 class UserMessageRequest(BaseModel):
@@ -93,9 +105,14 @@ class UserMessageRequest(BaseModel):
     mode: Optional[str] = "auto"  # "auto", "interview", "override"
 
 
+class RenameSessionRequest(BaseModel):
+    title: str
+
+
 def extract_helper_parts(raw_text: str) -> Dict[str, str]:
     """
-    Separates hidden <thought_process> and <GEM_BLUEPRINT> XML from the user-facing Hebrew message.
+    Separates hidden <thought_process> and <ARTIFACT_BLUEPRINT>/<GEM_BLUEPRINT> XML
+    from the user-facing Hebrew message.
     """
     thought = ""
     thought_match = re.search(
@@ -110,21 +127,25 @@ def extract_helper_parts(raw_text: str) -> Dict[str, str]:
 
     blueprint_xml = ""
     bp_match = re.search(
-        r"(<GEM_BLUEPRINT>.*?</GEM_BLUEPRINT>)", cleaned, flags=re.DOTALL | re.IGNORECASE
+        r"(<(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)\b.*?</(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)>)",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
     )
     if bp_match:
         blueprint_xml = bp_match.group(1).strip()
 
-    # Remove ```xml ... ``` wrapper around GEM_BLUEPRINT for the chat bubble text if needed
     chat_text = re.sub(
-        r"```xml\s*<GEM_BLUEPRINT>.*?</GEM_BLUEPRINT>\s*```",
+        r"```xml\s*<(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)\b.*?</(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)>\s*```",
         "",
         cleaned,
         flags=re.DOTALL | re.IGNORECASE,
     ).strip()
     if not chat_text and blueprint_xml:
         chat_text = re.sub(
-            r"<GEM_BLUEPRINT>.*?</GEM_BLUEPRINT>", "", cleaned, flags=re.DOTALL | re.IGNORECASE
+            r"<(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)\b.*?</(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)>",
+            "",
+            cleaned,
+            flags=re.DOTALL | re.IGNORECASE,
         ).strip()
 
     return {
@@ -136,7 +157,7 @@ def extract_helper_parts(raw_text: str) -> Dict[str, str]:
 
 def extract_construct_parts(raw_text: str) -> Dict[str, str]:
     """
-    Separates <compilation_check> from the compiled System Prompt.
+    Separates <compilation_check> from the compiled System Prompt / Skill artifact.
     """
     comp_check = ""
     match = re.search(
@@ -149,7 +170,6 @@ def extract_construct_parts(raw_text: str) -> Dict[str, str]:
         r"<compilation_check>.*?</compilation_check>", "", raw_text, flags=re.DOTALL | re.IGNORECASE
     ).strip()
 
-    # Strip outer 4-backtick or 3-backtick wrapper if present
     code_match = re.search(r"^`{3,4}(?:markdown|md)?\s*\n(.*?)\n`{3,4}\s*$", cleaned, flags=re.DOTALL)
     if code_match:
         cleaned = code_match.group(1).strip()
@@ -162,11 +182,27 @@ def extract_construct_parts(raw_text: str) -> Dict[str, str]:
 
 def parse_blueprint_tags(xml_str: str) -> Dict[str, str]:
     """
-    Extracts key XML tags from <GEM_BLUEPRINT> for visual cards in the UI.
+    Extracts key XML tags from <ARTIFACT_BLUEPRINT> (and legacy <GEM_BLUEPRINT>)
+    for visual cards in the UI while maintaining full backward compatibility.
     """
     if not xml_str:
         return {}
     tags = [
+        # BetterBot 2.0 schema
+        "TARGET_TYPE",
+        "SLUG_NAME",
+        "ROLE_TITLE",
+        "EPISTEMIC_STANCE",
+        "TONE_AND_LANGUAGE",
+        "DESCRIPTION_AND_TRIGGERS",
+        "NEGATIVE_TRIGGERS",
+        "CLARIFICATION_GATE",
+        "CORE_WORKFLOW",
+        "PROGRESSIVE_DISCLOSURE_REFS",
+        "VERIFICATION_RUBRIC",
+        "FORMAT_SPEC",
+        "GUARDRAILS",
+        # Shared / legacy schema
         "TITLE",
         "TONE",
         "DOMAIN_EXPERTISE",
@@ -176,11 +212,28 @@ def parse_blueprint_tags(xml_str: str) -> Dict[str, str]:
         "OUTPUT_FORMAT",
         "VERSION",
     ]
-    parsed = {}
+    parsed: Dict[str, str] = {}
     for tag in tags:
         m = re.search(rf"<{tag}>(.*?)</{tag}>", xml_str, flags=re.DOTALL | re.IGNORECASE)
         if m:
             parsed[tag.lower()] = m.group(1).strip()
+
+    # Map 2.0 tags onto legacy keys so existing UI cards render cleanly
+    if "title" not in parsed and "role_title" in parsed:
+        parsed["title"] = parsed["role_title"]
+    if "tone" not in parsed and "tone_and_language" in parsed:
+        parsed["tone"] = parsed["tone_and_language"]
+    if "domain_expertise" not in parsed and "epistemic_stance" in parsed:
+        parsed["domain_expertise"] = parsed["epistemic_stance"]
+    if "cognitive_modules" not in parsed and "verification_rubric" in parsed:
+        parsed["cognitive_modules"] = parsed["verification_rubric"]
+    if "workflow" not in parsed and "core_workflow" in parsed:
+        parsed["workflow"] = parsed["core_workflow"]
+    if "negative_constraints" not in parsed and "guardrails" in parsed:
+        parsed["negative_constraints"] = parsed["guardrails"]
+    if "output_format" not in parsed and "format_spec" in parsed:
+        parsed["output_format"] = parsed["format_spec"]
+
     return parsed
 
 
@@ -197,14 +250,25 @@ def create_new_session(
         "challenger_prompt": "",
         "error_log": [],
         "iteration_count": 0,
+        "target_type": "SYSTEM_PROMPT",
+        "slug_name": "",
+        "reference_files": {},
+        "rubric_scores": {},
+        "readiness_scores": {},
     }
     session = {
         "session_id": session_id,
         "title": title,
+        "title_manually_set": False,
         "created_at": now,
         "updated_at": now,
         "status": "idle",  # idle | interviewing | compiling | passed | escalated
         "active_node": None,
+        "target_type": "SYSTEM_PROMPT",
+        "slug_name": "",
+        "reference_files": {},
+        "rubric_scores": {},
+        "readiness_scores": {},
         "state": state,
         "parsed_blueprint": {},
         "clean_champion_prompt": "",
@@ -215,7 +279,7 @@ def create_new_session(
                 "id": str(uuid.uuid4())[:8],
                 "role": "assistant",
                 "agent": "The Helper (Requirements Architect)",
-                "text": "שלום! אני ארכיטקט הדרישות של **מפעל הבינה (BetterBot)**.\nתאר לי בשפה חופשית את סוכן ה-AI שאתה חולם לבנות — מה תפקידו, למי הוא מיועד, ואיך היית רוצה שיתנהג?",
+                "text": "שלום! אני ארכיטקט הדרישות של **מפעל הבינה (BetterBot 2.0)**.\nתאר לי בשפה חופשית את סוכן ה-AI או ה-Skill שאתה רוצה לבנות — מה מטרתו, מתי הוא אמור לפעול, ומה התוצר המצופה?",
                 "thought": "",
                 "timestamp": now,
             }
@@ -225,34 +289,69 @@ def create_new_session(
                 "id": str(uuid.uuid4())[:8],
                 "timestamp": now,
                 "node": "system",
-                "title": "אתחול מפעל הבינה",
-                "detail": "הסשן נוצר בזיכרון (In-Memory State). ממתין לתיאור הסוכן מהמשתמש.",
+                "title": "אתחול מפעל הבינה 2.0",
+                "detail": "הסשן נוצר ונשמר במסד הנתונים המתמיד. ממתין לתיאור הסוכן או ה-Skill.",
                 "status": "info",
             }
         ],
     }
     SESSIONS[session_id] = session
-    save_sessions_snapshot()
+    save_session_record(session_id)
     return session
 
 
 def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
     state = session["state"]
     bp_source = state.get("champion_xml") or state.get("challenger_xml") or ""
-    if "<GEM_BLUEPRINT>" in bp_source:
+    if has_blueprint_xml(bp_source):
         bp_match = re.search(
-            r"(<GEM_BLUEPRINT>.*?</GEM_BLUEPRINT>)", bp_source, flags=re.DOTALL | re.IGNORECASE
+            r"(<(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)\b.*?</(?:ARTIFACT_BLUEPRINT|GEM_BLUEPRINT)>)",
+            bp_source,
+            flags=re.DOTALL | re.IGNORECASE,
         )
         raw_bp = bp_match.group(1).strip() if bp_match else bp_source
-        session["parsed_blueprint"] = parse_blueprint_tags(raw_bp)
+        parsed_bp = parse_blueprint_tags(raw_bp)
+        session["parsed_blueprint"] = parsed_bp
         session["raw_blueprint"] = raw_bp
     else:
+        parsed_bp = {}
         session["parsed_blueprint"] = {}
         session["raw_blueprint"] = ""
+
+    # Expose BetterBot 2.0 state fields at top level for REST & SSE consumers
+    session["target_type"] = (
+        state.get("target_type")
+        or parsed_bp.get("target_type")
+        or session.get("target_type")
+        or "SYSTEM_PROMPT"
+    )
+    session["slug_name"] = (
+        state.get("slug_name")
+        or parsed_bp.get("slug_name")
+        or session.get("slug_name")
+        or ""
+    )
+    session["reference_files"] = state.get("reference_files") or session.get("reference_files") or {}
+    session["rubric_scores"] = state.get("rubric_scores") or session.get("rubric_scores") or {}
+    session["readiness_scores"] = state.get("readiness_scores") or session.get("readiness_scores") or {}
+
+    # Auto-derive session title from <ROLE_TITLE>, <TITLE>, or slug_name if not manually renamed
+    if not session.get("title_manually_set"):
+        derived_title = (
+            parsed_bp.get("role_title")
+            or parsed_bp.get("title")
+            or session.get("slug_name")
+        )
+        if derived_title:
+            session["title"] = derived_title[:60]
 
     champ_p = state.get("champion_prompt", "")
     chall_p = state.get("challenger_prompt", "")
     if champ_p:
+        _, parsed_refs = main.parse_compiled_artifacts(champ_p)
+        if parsed_refs:
+            state["reference_files"] = {**(state.get("reference_files") or {}), **parsed_refs}
+            session["reference_files"] = state["reference_files"]
         parts = extract_construct_parts(champ_p)
         session["clean_champion_prompt"] = parts["clean_prompt"]
         if parts["compilation_check"]:
@@ -261,6 +360,10 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
         session["clean_champion_prompt"] = ""
 
     if chall_p:
+        _, parsed_refs = main.parse_compiled_artifacts(chall_p)
+        if parsed_refs:
+            state["reference_files"] = {**(state.get("reference_files") or {}), **parsed_refs}
+            session["reference_files"] = state["reference_files"]
         parts = extract_construct_parts(chall_p)
         session["clean_challenger_prompt"] = parts["clean_prompt"]
         if parts["compilation_check"]:
@@ -286,26 +389,16 @@ async def serve_index():
 async def health_check():
     return {
         "status": "ok",
-        "model": getattr(main.llm, "model", "gemini-4-hydrogen"),
+        "model": getattr(main.llm, "model", main.FAST_MODEL),
+        "compiler_model": getattr(main.compiler_llm, "model", main.COMPILER_MODEL),
+        "decision_model": main.DECISION_MODEL,
         "active_sessions": len(SESSIONS),
     }
 
 
 @app.get("/api/sessions")
 async def list_sessions():
-    items = []
-    for sid, sess in reversed(list(SESSIONS.items())):
-        items.append(
-            {
-                "session_id": sid,
-                "title": sess["title"],
-                "status": sess["status"],
-                "created_at": sess["created_at"],
-                "updated_at": sess["updated_at"],
-                "iteration_count": sess["state"].get("iteration_count", 0),
-            }
-        )
-    return {"sessions": items}
+    return {"sessions": storage.list_sessions()}
 
 
 @app.post("/api/sessions")
@@ -316,17 +409,81 @@ async def create_session_endpoint():
 
 @app.get("/api/sessions/{session_id}")
 async def get_session_endpoint(session_id: str):
-    if session_id not in SESSIONS:
-        create_new_session(session_id=session_id)
-    return enrich_session(SESSIONS[session_id])
+    session = get_or_load_session(session_id)
+    if not session:
+        session = create_new_session(session_id=session_id)
+    return enrich_session(session)
+
+
+@app.patch("/api/sessions/{session_id}")
+async def rename_session_endpoint(session_id: str, req: RenameSessionRequest):
+    clean_title = req.title.strip()
+    if not clean_title:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    session = get_or_load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    session["title"] = clean_title
+    session["title_manually_set"] = True
+    storage.rename_session(session_id, clean_title)
+    return enrich_session(session)
 
 
 @app.delete("/api/sessions/{session_id}")
 async def delete_session_endpoint(session_id: str):
-    if session_id in SESSIONS:
-        del SESSIONS[session_id]
-        save_sessions_snapshot()
-    return {"deleted": True}
+    SESSIONS.pop(session_id, None)
+    deleted = storage.delete_session(session_id)
+    return {"deleted": bool(deleted)}
+
+
+@app.get("/api/sessions/{session_id}/download")
+async def download_session_bundle(session_id: str):
+    session = get_or_load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    sess = enrich_session(session)
+    target_type = sess.get("target_type") or "SYSTEM_PROMPT"
+    raw_slug = sess.get("slug_name") or session_id
+    safe_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw_slug).strip("-") or session_id
+
+    primary_content = sess.get("clean_champion_prompt") or sess.get("clean_challenger_prompt") or ""
+    ref_files = dict(sess.get("reference_files") or {})
+    raw_blueprint = sess.get("raw_blueprint") or ""
+
+    buf = io.BytesIO()
+    written_paths = set()
+
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        if target_type == "SKILL_PACKAGE":
+            if "SKILL.md" not in ref_files and primary_content:
+                zf.writestr("SKILL.md", primary_content)
+                written_paths.add("SKILL.md")
+        elif target_type == "HYBRID_BUNDLE":
+            if "SYSTEM_PROMPT.md" not in ref_files and "SKILL.md" not in ref_files and primary_content:
+                zf.writestr("SYSTEM_PROMPT.md", primary_content)
+                written_paths.add("SYSTEM_PROMPT.md")
+        else:
+            if "SYSTEM_PROMPT.md" not in ref_files and primary_content:
+                zf.writestr("SYSTEM_PROMPT.md", primary_content)
+                written_paths.add("SYSTEM_PROMPT.md")
+
+        for rel_path, content in ref_files.items():
+            norm_path = rel_path.lstrip("/\\").replace("\\", "/")
+            if not norm_path or ".." in norm_path or norm_path in written_paths:
+                continue
+            zf.writestr(norm_path, content or "")
+            written_paths.add(norm_path)
+
+        if raw_blueprint:
+            zf.writestr("blueprint.xml", raw_blueprint)
+
+    buf.seek(0)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{safe_slug}.zip"'},
+    )
 
 
 @app.post("/api/sessions/{session_id}/stream")
@@ -335,10 +492,9 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
     Executes the LangGraph workflow step-by-step and streams real-time SSE updates
     so the UI can animate each node (Helper -> Construct -> Adjudicator <-> Upgrader).
     """
-    if session_id not in SESSIONS:
-        create_new_session(session_id=session_id)
-
-    session = SESSIONS[session_id]
+    session = get_or_load_session(session_id)
+    if not session:
+        session = create_new_session(session_id=session_id)
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
@@ -399,6 +555,8 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
             last_helper = state.get("challenger_xml", "")
             state["user_input"] += f"\nAssistant: {last_helper}\nUser: {user_msg}"
 
+    save_session_record(session_id)
+
     async def event_generator():
         def sse(event_type: str, payload: Dict[str, Any]) -> str:
             return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -407,15 +565,16 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
             # Determine starting node using route_from_start
             current_node = route_from_start(state)
             yield sse("session_update", enrich_session(session))
+            await asyncio.sleep(0)
 
             while current_node != main.END:
                 step_time = datetime.now().strftime("%H:%M:%S")
                 session["active_node"] = current_node
 
                 node_labels = {
-                    "node_1_helper": ("Node 1: The Helper", "מנתח דרישות ומנסח שאלות / XML Blueprint..."),
-                    "node_2_construct": ("Node 2: The Construct", "מהדר את ה-XML Blueprint לפרומפט מערכת שלם..."),
-                    "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-XML והפרומפט..."),
+                    "node_1_helper": ("Node 1: The Helper", "מנתח דרישות ומנסח שאלות / Blueprint..."),
+                    "node_2_construct": ("Node 2: The Construct", "מהדר את ה-Blueprint לתוצר סופי..."),
+                    "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-Blueprint והתוצר..."),
                     "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
                 }
                 label_title, label_desc = node_labels.get(current_node, (current_node, "מבצע פעולה..."))
@@ -429,6 +588,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                         "iteration": state.get("iteration_count", 0),
                     },
                 )
+                await asyncio.sleep(0)
 
                 # Execute the node in a worker thread so event loop stays responsive
                 if current_node == "node_1_helper":
@@ -437,7 +597,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                     state.update(update)
 
                     parts = extract_helper_parts(state.get("challenger_xml", ""))
-                    has_blueprint = "<GEM_BLUEPRINT>" in state.get("challenger_xml", "")
+                    has_blueprint = has_blueprint_xml(state.get("challenger_xml", ""))
 
                     if has_blueprint:
                         session["chat_history"].append(
@@ -446,7 +606,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                                 "role": "assistant",
                                 "agent": "The Helper (Requirements Architect)",
                                 "text": parts["chat_text"]
-                                or "תוכנית האב (`<GEM_BLUEPRINT>`) מוכנה! מעביר כעת למהדר הפרומפטים (The Construct)...",
+                                or "תוכנית האב (`<ARTIFACT_BLUEPRINT>`) מוכנה! מעביר כעת למהדר (The Construct)...",
                                 "thought": parts["thought"],
                                 "has_blueprint": True,
                                 "timestamp": step_time,
@@ -572,11 +732,12 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                         )
 
                     next_node = route_from_adjudicator(state)
-                    # Check if circuit breaker triggered (iteration >= 3 on FAIL)
+                    max_iters = getattr(main, "MAX_QA_ITERATIONS", 2)
+                    # Check if circuit breaker triggered (iteration >= MAX_QA_ITERATIONS on FAIL)
                     if (
                         next_node == main.END
                         and "[FAIL]" in last_log
-                        and state.get("iteration_count", 0) >= 3
+                        and state.get("iteration_count", 0) >= max_iters
                     ):
                         state["error_log"].append(
                             f"[ESCALATE] Circuit Breaker triggered after {state['iteration_count']} attempts. {last_log}"
@@ -594,15 +755,17 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                 else:
                     break
 
-                save_sessions_snapshot()
+                enrich_session(session)
+                save_session_record(session_id)
                 yield sse(
                     "node_complete",
                     {
                         "node": current_node,
                         "next_node": None if next_node == main.END else next_node,
-                        "session": enrich_session(session),
+                        "session": session,
                     },
                 )
+                await asyncio.sleep(0)
                 current_node = next_node
 
             # Finalize status after graph reaches END
@@ -639,8 +802,9 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
             else:
                 session["status"] = "interviewing"
 
-            save_sessions_snapshot()
-            yield sse("done", enrich_session(session))
+            enrich_session(session)
+            save_session_record(session_id)
+            yield sse("done", session)
 
         except Exception as exc:
             session["active_node"] = None
@@ -655,8 +819,9 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                     "status": "danger",
                 }
             )
-            save_sessions_snapshot()
-            yield sse("error", {"error": err_msg, "session": enrich_session(session)})
+            enrich_session(session)
+            save_session_record(session_id)
+            yield sse("error", {"error": err_msg, "session": session})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -715,22 +880,35 @@ class BettyClearRequest(BaseModel):
 
 
 def build_session_context_for_betty(session_id: Optional[str]) -> str:
-    if not session_id or session_id not in SESSIONS:
+    if not session_id:
         return "<current_session_context>\nNo active session selected.\n</current_session_context>"
 
-    sess = enrich_session(SESSIONS[session_id])
+    loaded = get_or_load_session(session_id)
+    if not loaded:
+        return "<current_session_context>\nNo active session selected.\n</current_session_context>"
+
+    sess = enrich_session(loaded)
     st = sess.get("state", {})
     lines = [
         "<current_session_context>",
         f"Session ID: {sess.get('session_id')}",
         f"Session Title: {sess.get('title')}",
+        f"Target Type: {sess.get('target_type', 'SYSTEM_PROMPT')}",
+        f"Slug Name: {sess.get('slug_name') or 'N/A'}",
         f"Current Status: {sess.get('status')} (Active Node: {sess.get('active_node')})",
-        f"QA Iteration Count: {st.get('iteration_count', 0)} / 3",
+        f"QA Iteration Count: {st.get('iteration_count', 0)} / {getattr(main, 'MAX_QA_ITERATIONS', 2)}",
     ]
+    if sess.get("rubric_scores"):
+        lines.append(
+            f"gemini-decision-1 Rubric Scores:\n{json.dumps(sess['rubric_scores'], ensure_ascii=False)}"
+        )
     if sess.get("raw_blueprint"):
-        lines.append(f"Current <GEM_BLUEPRINT>:\n{sess['raw_blueprint']}")
+        lines.append(f"Current Blueprint XML:\n{sess['raw_blueprint']}")
     if sess.get("clean_champion_prompt"):
-        lines.append(f"Current Champion Prompt:\n{sess['clean_champion_prompt'][:2500]}")
+        lines.append(f"Current Champion Artifact:\n{sess['clean_champion_prompt'][:2500]}")
+    if sess.get("reference_files"):
+        ref_summary = ", ".join(sess["reference_files"].keys())
+        lines.append(f"Auxiliary Reference Files (Progressive Disclosure): {ref_summary}")
     if st.get("error_log"):
         lines.append("QA Error Log:\n" + "\n".join(st["error_log"][-4:]))
     lines.append("</current_session_context>")
@@ -870,6 +1048,8 @@ async def betty_chat_endpoint(req: BettyChatRequest):
             "timestamp": datetime.now().strftime("%H:%M:%S"),
         }
         history.append(reply_item)
+        if req.session_id and req.session_id in SESSIONS:
+            save_session_record(req.session_id)
         return {
             "mode": mode,
             "reply": reply_item,

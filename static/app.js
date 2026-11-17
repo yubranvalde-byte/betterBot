@@ -10,6 +10,15 @@ let activeWorkspaceView = "view-interview";
 let activeStreamingNode = null;
 let activeStreamingDesc = "";
 let timelineFilterQuery = "";
+let activeArtifactFile = "__primary__";
+let cachedSessionsList = [];
+let historyFilterType = "ALL";
+let historySearchQuery = "";
+
+const STORAGE_KEYS = {
+  ACTIVE_SESSION_ID: "betterbot_active_session_id",
+  ACTIVE_VIEW: "betterbot_active_view",
+};
 
 const ICONS = {
   check: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
@@ -53,6 +62,14 @@ const els = {
   modelNameText: document.getElementById("modelNameText"),
   sessionSelect: document.getElementById("sessionSelect"),
   newSessionBtn: document.getElementById("newSessionBtn"),
+  historyLibraryWrap: document.getElementById("historyLibraryWrap"),
+  historyLibraryBtn: document.getElementById("historyLibraryBtn"),
+  historyCountBadge: document.getElementById("historyCountBadge"),
+  historyLibraryPopover: document.getElementById("historyLibraryPopover"),
+  historySearchInput: document.getElementById("historySearchInput"),
+  historyFilterBar: document.getElementById("historyFilterBar"),
+  historyLibraryList: document.getElementById("historyLibraryList"),
+  readinessBarWrap: document.getElementById("readinessBarWrap"),
 
   headerTelemetryPill: document.getElementById("headerTelemetryPill"),
   telemetryLiveDot: document.getElementById("telemetryLiveDot"),
@@ -82,13 +99,17 @@ const els = {
   promptStatusPill: document.getElementById("promptStatusPill"),
   qaCountPill: document.getElementById("qaCountPill"),
   promptVersionTag: document.getElementById("promptVersionTag"),
+  artifactTargetTypeBadge: document.getElementById("artifactTargetTypeBadge"),
+  artifactSlugBadge: document.getElementById("artifactSlugBadge"),
   promptStatsText: document.getElementById("promptStatsText"),
   toggleRawPromptBtn: document.getElementById("toggleRawPromptBtn"),
   copyPromptBtn: document.getElementById("copyPromptBtn"),
   downloadPromptBtn: document.getElementById("downloadPromptBtn"),
+  downloadZipBtn: document.getElementById("downloadZipBtn"),
 
   promptEmptyState: document.getElementById("promptEmptyState"),
   promptDisplayContainer: document.getElementById("promptDisplayContainer"),
+  artifactFileSwitcher: document.getElementById("artifactFileSwitcher"),
   compilationCheckBox: document.getElementById("compilationCheckBox"),
   compilationCheckContent: document.getElementById("compilationCheckContent"),
   promptFormattedView: document.getElementById("promptFormattedView"),
@@ -105,6 +126,7 @@ const els = {
   artifactUpgraderInput: document.getElementById("artifactUpgraderInput"),
   artifactUpgraderSendBtn: document.getElementById("artifactUpgraderSendBtn"),
 
+  decisionRubricCard: document.getElementById("decisionRubricCard"),
   qaLogsList: document.getElementById("qaLogsList"),
   diffComparisonSection: document.getElementById("diffComparisonSection"),
   diffUnifiedContainer: document.getElementById("diffUnifiedContainer"),
@@ -134,7 +156,7 @@ async function checkHealth() {
   try {
     const res = await fetch("/api/health");
     const data = await res.json();
-    if (data.model) {
+    if (data.model && els.modelNameText) {
       els.modelNameText.textContent = data.model;
     }
   } catch (err) {
@@ -145,15 +167,35 @@ async function checkHealth() {
 async function initSession() {
   const listRes = await fetch("/api/sessions");
   const listData = await listRes.json();
+  cachedSessionsList = listData.sessions || [];
 
-  if (listData.sessions && listData.sessions.length > 0) {
-    const firstId = listData.sessions[0].session_id;
-    const sessRes = await fetch(`/api/sessions/${firstId}`);
-    currentSession = await sessRes.json();
-    await refreshSessionSelector();
-    renderAll(currentSession);
+  const savedSessionId = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
+  const savedView = localStorage.getItem(STORAGE_KEYS.ACTIVE_VIEW);
+
+  if (cachedSessionsList.length > 0) {
+    const targetId =
+      savedSessionId && cachedSessionsList.some((s) => s.session_id === savedSessionId)
+        ? savedSessionId
+        : cachedSessionsList[0].session_id;
+    await loadSessionById(targetId, false);
+    if (savedView && document.getElementById(savedView)) {
+      switchWorkspaceView(savedView);
+    }
   } else {
     await createNewSession();
+  }
+}
+
+async function loadSessionById(sessionId, closeHistory = true) {
+  if (!sessionId || isStreaming) return;
+  const res = await fetch(`/api/sessions/${sessionId}`);
+  currentSession = await res.json();
+  activeArtifactFile = "__primary__";
+  localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
+  await refreshSessionSelector();
+  renderAll(currentSession);
+  if (closeHistory && els.historyLibraryPopover) {
+    els.historyLibraryPopover.classList.add("hidden");
   }
 }
 
@@ -161,6 +203,8 @@ async function createNewSession() {
   if (isStreaming) return;
   const res = await fetch("/api/sessions", { method: "POST" });
   currentSession = await res.json();
+  activeArtifactFile = "__primary__";
+  localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
   await refreshSessionSelector();
   switchWorkspaceView("view-interview");
   renderAll(currentSession);
@@ -170,16 +214,125 @@ async function createNewSession() {
 async function refreshSessionSelector() {
   const res = await fetch("/api/sessions");
   const data = await res.json();
+  cachedSessionsList = data.sessions || [];
+
   els.sessionSelect.innerHTML = "";
-  (data.sessions || []).forEach((s) => {
+  cachedSessionsList.forEach((s) => {
     const opt = document.createElement("option");
     opt.value = s.session_id;
-    opt.textContent = `${s.title} (${s.created_at})`;
+    opt.textContent = `${s.title} (${s.target_type || "PROMPT"})`;
     if (currentSession && s.session_id === currentSession.session_id) {
       opt.selected = true;
     }
     els.sessionSelect.appendChild(opt);
   });
+
+  if (els.historyCountBadge) {
+    els.historyCountBadge.textContent = String(cachedSessionsList.length);
+  }
+  renderHistoryLibraryList();
+}
+
+function renderHistoryLibraryList() {
+  if (!els.historyLibraryList) return;
+  const q = historySearchQuery.trim().toLowerCase();
+  const filtered = cachedSessionsList.filter((s) => {
+    const typeMatch = historyFilterType === "ALL" || (s.target_type || "SYSTEM_PROMPT") === historyFilterType;
+    if (!typeMatch) return false;
+    if (!q) return true;
+    const hay = `${s.title || ""} ${s.target_type || ""} ${s.slug_name || ""} ${s.status || ""}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  if (filtered.length === 0) {
+    els.historyLibraryList.innerHTML = `<div class="empty-state" style="min-height:110px;padding:12px;"><p>לא נמצאו יצירות תואמות.</p></div>`;
+    return;
+  }
+
+  els.historyLibraryList.innerHTML = "";
+  filtered.forEach((s) => {
+    const item = document.createElement("div");
+    item.className = "history-item";
+    if (currentSession && s.session_id === currentSession.session_id) {
+      item.classList.add("active");
+    }
+
+    const statusUpper = String(s.status || "idle").toUpperCase();
+    let statusCls = "";
+    if (statusUpper === "PASSED" || statusUpper === "PASS") statusCls = "status-passed";
+    else if (statusUpper === "ESCALATED" || statusUpper === "ESCALATE") statusCls = "status-escalated";
+
+    const timeLabel = formatRelativeTime(s.updated_at_iso || s.updated_at || s.created_at);
+
+    item.innerHTML = `
+      <div class="history-item-main">
+        <div class="history-item-title">${escapeHtml(s.title || "ללא שם")}</div>
+        <div class="history-item-meta">
+          <span class="target-type-badge">${escapeHtml(s.target_type || "SYSTEM_PROMPT")}</span>
+          <span class="status-badge ${statusCls}">${escapeHtml(statusUpper)}</span>
+          <span class="history-time">${escapeHtml(timeLabel)}</span>
+        </div>
+      </div>
+      <div class="history-item-actions">
+        <button type="button" class="history-action-btn rename" title="שנה שם">${ICONS.edit}</button>
+        <button type="button" class="history-action-btn delete" title="מחק יצירה">${ICONS.trash}</button>
+      </div>
+    `;
+
+    item.querySelector(".history-item-main").addEventListener("click", () => {
+      loadSessionById(s.session_id, true);
+    });
+
+    item.querySelector(".history-action-btn.rename").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const nextTitle = window.prompt("הזן שם חדש ליצירה:", s.title || "");
+      if (!nextTitle || !nextTitle.trim()) return;
+      const resp = await fetch(`/api/sessions/${s.session_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle.trim() }),
+      });
+      if (resp.ok) {
+        const updated = await resp.json();
+        if (currentSession && currentSession.session_id === s.session_id) {
+          currentSession = updated;
+        }
+        await refreshSessionSelector();
+        showToast("שם היצירה עודכן", "check");
+      }
+    });
+
+    item.querySelector(".history-action-btn.delete").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!window.confirm(`למחוק את "${s.title}" מההיסטוריה?`)) return;
+      const resp = await fetch(`/api/sessions/${s.session_id}`, { method: "DELETE" });
+      if (resp.ok) {
+        if (currentSession && currentSession.session_id === s.session_id) {
+          localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
+          currentSession = null;
+          await initSession();
+        } else {
+          await refreshSessionSelector();
+        }
+        showToast("היצירה נמחקה", "trash");
+      }
+    });
+
+    els.historyLibraryList.appendChild(item);
+  });
+}
+
+function formatRelativeTime(isoOrClock) {
+  if (!isoOrClock) return "";
+  const parsed = Date.parse(isoOrClock);
+  if (Number.isNaN(parsed)) return isoOrClock;
+  const diffSec = Math.max(0, Math.floor((Date.now() - parsed) / 1000));
+  if (diffSec < 60) return "עכשיו";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `לפני ${diffMin} דק'`;
+  const diffHrs = Math.floor(diffMin / 60);
+  if (diffHrs < 24) return `לפני ${diffHrs} שע'`;
+  return new Date(parsed).toLocaleDateString("he-IL");
 }
 
 // ==========================================
@@ -188,6 +341,7 @@ async function refreshSessionSelector() {
 function switchWorkspaceView(viewId) {
   if (!viewId) return;
   activeWorkspaceView = viewId;
+  localStorage.setItem(STORAGE_KEYS.ACTIVE_VIEW, viewId);
 
   document.querySelectorAll(".nav-rail-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === viewId);
@@ -238,11 +392,49 @@ function bindUIEvents() {
 
   els.sessionSelect.addEventListener("change", async (e) => {
     const sid = e.target.value;
-    if (!sid || isStreaming) return;
-    const res = await fetch(`/api/sessions/${sid}`);
-    currentSession = await res.json();
-    renderAll(currentSession);
+    await loadSessionById(sid, true);
   });
+
+  // Creation History Library Popover Toggle, Search & Filter
+  if (els.historyLibraryBtn && els.historyLibraryPopover) {
+    els.historyLibraryBtn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const isHidden = els.historyLibraryPopover.classList.toggle("hidden");
+      if (!isHidden) {
+        await refreshSessionSelector();
+        if (els.historySearchInput) els.historySearchInput.focus();
+      }
+    });
+
+    document.addEventListener("click", (e) => {
+      if (
+        els.historyLibraryWrap &&
+        !els.historyLibraryWrap.contains(e.target) &&
+        !els.historyLibraryPopover.classList.contains("hidden")
+      ) {
+        els.historyLibraryPopover.classList.add("hidden");
+      }
+    });
+  }
+
+  if (els.historySearchInput) {
+    els.historySearchInput.addEventListener("input", (e) => {
+      historySearchQuery = e.target.value || "";
+      renderHistoryLibraryList();
+    });
+  }
+
+  if (els.historyFilterBar) {
+    els.historyFilterBar.querySelectorAll(".history-filter-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        historyFilterType = chip.dataset.filter || "ALL";
+        els.historyFilterBar.querySelectorAll(".history-filter-chip").forEach((c) => {
+          c.classList.toggle("active", c.dataset.filter === historyFilterType);
+        });
+        renderHistoryLibraryList();
+      });
+    });
+  }
 
   // Navigation Rail View Buttons
   document.querySelectorAll(".nav-rail-btn").forEach((btn) => {
@@ -367,27 +559,45 @@ function bindUIEvents() {
     els.promptRawView.classList.toggle("hidden", !showRawPrompt);
   });
 
-  // Copy Prompt
+  // Copy Prompt / Active File
   els.copyPromptBtn.addEventListener("click", () => {
-    const promptText = getBestPrompt(currentSession);
-    if (!promptText) return;
-    navigator.clipboard.writeText(promptText);
-    showToast("פרומפט המערכת הועתק ללוח", "check");
+    const contentText = getActiveArtifactContent(currentSession);
+    if (!contentText) return;
+    navigator.clipboard.writeText(contentText);
+    showToast("תוכן הקובץ הועתק ללוח", "check");
   });
 
   // Download Prompt .MD
   els.downloadPromptBtn.addEventListener("click", () => {
-    const promptText = getBestPrompt(currentSession);
-    if (!promptText) return;
-    const blob = new Blob([promptText], { type: "text/markdown;charset=utf-8" });
+    const contentText = getActiveArtifactContent(currentSession);
+    if (!contentText) return;
+    const targetType = currentSession?.target_type || "SYSTEM_PROMPT";
+    const defaultName = targetType === "SKILL_PACKAGE" ? "SKILL.md" : `system_prompt_${currentSession?.session_id || "gem"}.md`;
+    const fileName =
+      activeArtifactFile !== "__primary__"
+        ? activeArtifactFile.split("/").pop()
+        : defaultName;
+    const blob = new Blob([contentText], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `system_prompt_${currentSession?.session_id || "gem"}.md`;
+    a.download = fileName;
     a.click();
     URL.revokeObjectURL(url);
     showToast("הקובץ ירד בהצלחה", "download");
   });
+
+  // Download Full Package .ZIP
+  if (els.downloadZipBtn) {
+    els.downloadZipBtn.addEventListener("click", () => {
+      if (!currentSession?.session_id) return;
+      const a = document.createElement("a");
+      a.href = `/api/sessions/${currentSession.session_id}/download`;
+      a.download = `${currentSession.slug_name || currentSession.session_id}.zip`;
+      a.click();
+      showToast("מוריד חבילה מלאה (.ZIP)...", "download");
+    });
+  }
 
   // Copy XML
   els.copyXmlBtn.addEventListener("click", () => {
@@ -492,7 +702,7 @@ function handleSSEBlock(block) {
     return;
   }
 
-  if (eventType === "session_update") {
+  if (eventType === "session_update" || eventType === "state_update") {
     currentSession = payload;
     renderAll(currentSession);
   } else if (eventType === "node_start") {
@@ -543,16 +753,55 @@ function handleSSEBlock(block) {
 // ==========================================
 function renderAll(session) {
   if (!session) return;
+  if (session.session_id) {
+    localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, session.session_id);
+  }
   const userTurns = (session.chat_history || []).filter((m) => m.role === "user").length;
   els.presetsContainer.classList.toggle("hidden", userTurns > 0);
 
   renderPipelineStatus(session);
+  renderReadinessPill(session);
   renderChatHistory(session.chat_history || []);
   renderInputMode(session);
   renderPromptTab(session);
   renderBlueprintTab(session);
   renderQATab(session);
   renderTimelineTab(session.timeline || []);
+}
+
+function renderReadinessPill(session) {
+  if (!els.readinessBarWrap) return;
+  const st = session.state || {};
+  const readiness = session.readiness_scores || st.readiness_scores || {};
+  const targetType = session.target_type || st.target_type;
+
+  if (!readiness.used_decision_model && !targetType) {
+    els.readinessBarWrap.classList.add("hidden");
+    return;
+  }
+
+  const dims = [
+    { key: "has_core_objective", label: "מטרה" },
+    { key: "has_trigger_or_context", label: "הפעלה" },
+    { key: "has_output_contract", label: "פלט" },
+  ];
+  const dotsHtml = dims
+    .map((d) => {
+      const ok = Number(readiness[d.key] || 0) >= 0.8;
+      return `<span class="readiness-dim-dot ${ok ? "ready" : ""}" title="${d.label}: ${Math.round(Number(readiness[d.key] || 0) * 100)}%"></span>`;
+    })
+    .join("");
+
+  const readyPct = readiness.used_decision_model
+    ? `${Math.round(Number(readiness.ready_to_compile || 0) * 100)}% מוכנות`
+    : "אפיון פעיל";
+
+  els.readinessBarWrap.classList.remove("hidden");
+  els.readinessBarWrap.innerHTML = `
+    <span class="target-type-badge">${escapeHtml(targetType || "SYSTEM_PROMPT")}</span>
+    <span class="readiness-dim-dots">${dotsHtml}</span>
+    <span class="mono-text" style="font-size:0.72rem;">${escapeHtml(readyPct)}</span>
+  `;
 }
 
 function renderPipelineStatus(session) {
@@ -807,6 +1056,15 @@ function getBestPrompt(session) {
   return session.clean_champion_prompt || session.clean_challenger_prompt || "";
 }
 
+function getActiveArtifactContent(session) {
+  if (!session) return "";
+  const refFiles = session.reference_files || session.state?.reference_files || {};
+  if (activeArtifactFile !== "__primary__" && refFiles[activeArtifactFile] !== undefined) {
+    return refFiles[activeArtifactFile];
+  }
+  return getBestPrompt(session);
+}
+
 function buildSkeletonHTML(agentLabel, actionDesc) {
   return `
     <div class="skeleton-loader">
@@ -828,6 +1086,9 @@ function buildSkeletonHTML(agentLabel, actionDesc) {
 function renderPromptTab(session) {
   const promptText = getBestPrompt(session);
   const state = session.state || {};
+  const targetType = session.target_type || state.target_type || "SYSTEM_PROMPT";
+  const slugName = session.slug_name || state.slug_name || "";
+  const refFiles = session.reference_files || state.reference_files || {};
   const activeNode = activeStreamingNode || session.active_node;
   const isPromptCompiling =
     activeNode === "node_2_construct" ||
@@ -835,11 +1096,23 @@ function renderPromptTab(session) {
     activeNode === "node_4_adjudicator" ||
     session.status === "compiling";
 
+  if (els.artifactTargetTypeBadge) {
+    els.artifactTargetTypeBadge.textContent = targetType;
+    els.artifactTargetTypeBadge.classList.toggle("hidden", !promptText && !slugName);
+  }
+  if (els.artifactSlugBadge) {
+    const codeEl = els.artifactSlugBadge.querySelector("code");
+    if (codeEl) codeEl.textContent = slugName;
+    els.artifactSlugBadge.classList.toggle("hidden", !slugName);
+  }
+
   if (!promptText) {
     els.promptEmptyState.classList.remove("hidden");
     els.promptDisplayContainer.classList.add("hidden");
     els.copyPromptBtn.disabled = true;
     els.downloadPromptBtn.disabled = true;
+    if (els.downloadZipBtn) els.downloadZipBtn.disabled = true;
+    if (els.artifactFileSwitcher) els.artifactFileSwitcher.classList.add("hidden");
     els.promptStatsText.textContent = "0 תווים · ~0 טוקנים";
 
     if (isPromptCompiling) {
@@ -854,7 +1127,7 @@ function renderPromptTab(session) {
       els.promptVersionTag.className = "badge badge-warning";
       els.promptEmptyState.innerHTML = buildSkeletonHTML(
         agentLabel,
-        activeStreamingDesc || "בונה ומהדר את פרומפט המערכת מתוך תוכנית האב..."
+        activeStreamingDesc || "בונה ומהדר את התוצר מתוך תוכנית האב..."
       );
     } else {
       els.promptStatusPill.textContent = "ריק";
@@ -862,8 +1135,8 @@ function renderPromptTab(session) {
       els.promptVersionTag.className = "badge badge-neutral";
       els.promptEmptyState.innerHTML = `
         <div class="empty-illustration">${ICONS.layersLg}</div>
-        <h3>פרומפט המערכת יופיע כאן</h3>
-        <p>לאחר סיום הראיון הקצר עם <code class="tech-token" dir="ltr">The Helper</code>, המהדר (<code class="tech-token" dir="ltr">The Construct</code>) יבנה כאן את פרומפט המערכת המלא ויעביר אותו בדיקות <code class="tech-token" dir="ltr">QA</code> אוטומטיות.</p>
+        <h3>תוצר המערכת יופיע כאן</h3>
+        <p>לאחר סיום הראיון הקצר עם <code class="tech-token" dir="ltr">The Helper</code>, המהדר (<code class="tech-token" dir="ltr">The Construct</code>) יבנה כאן את ה-<code class="tech-token" dir="ltr">Skill / System Prompt</code> ויעביר אותו בדיקות <code class="tech-token" dir="ltr">QA</code> אוטומטיות.</p>
       `;
     }
     return;
@@ -873,13 +1146,58 @@ function renderPromptTab(session) {
   els.promptDisplayContainer.classList.remove("hidden");
   els.copyPromptBtn.disabled = false;
   els.downloadPromptBtn.disabled = false;
+  if (els.downloadZipBtn) els.downloadZipBtn.disabled = false;
 
-  const chars = promptText.length;
+  // Multi-file switcher bar
+  const refKeys = Object.keys(refFiles);
+  if (activeArtifactFile !== "__primary__" && refFiles[activeArtifactFile] === undefined) {
+    activeArtifactFile = "__primary__";
+  }
+
+  if (els.artifactFileSwitcher) {
+    if (refKeys.length > 0) {
+      els.artifactFileSwitcher.classList.remove("hidden");
+      const primaryLabel =
+        targetType === "SKILL_PACKAGE"
+          ? "SKILL.md"
+          : targetType === "HYBRID_BUNDLE"
+          ? "Primary Bundle"
+          : "SYSTEM_PROMPT.md";
+      els.artifactFileSwitcher.innerHTML = "";
+
+      const primaryBtn = document.createElement("button");
+      primaryBtn.type = "button";
+      primaryBtn.className = `file-tab-btn ${activeArtifactFile === "__primary__" ? "active" : ""}`;
+      primaryBtn.textContent = primaryLabel;
+      primaryBtn.addEventListener("click", () => {
+        activeArtifactFile = "__primary__";
+        renderPromptTab(currentSession);
+      });
+      els.artifactFileSwitcher.appendChild(primaryBtn);
+
+      refKeys.forEach((relPath) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `file-tab-btn ${activeArtifactFile === relPath ? "active" : ""}`;
+        btn.textContent = relPath;
+        btn.addEventListener("click", () => {
+          activeArtifactFile = relPath;
+          renderPromptTab(currentSession);
+        });
+        els.artifactFileSwitcher.appendChild(btn);
+      });
+    } else {
+      els.artifactFileSwitcher.classList.add("hidden");
+    }
+  }
+
+  const displayedContent = getActiveArtifactContent(session);
+  const chars = displayedContent.length;
   els.promptStatsText.textContent = `${chars.toLocaleString()} תווים · ~${Math.ceil(chars / 4).toLocaleString()} טוקנים`;
 
   if (session.status === "passed") {
     els.promptStatusPill.textContent = "מאושר";
-    els.promptVersionTag.innerHTML = `${ICONS.check} <span>Champion Prompt (Approved)</span>`;
+    els.promptVersionTag.innerHTML = `${ICONS.check} <span>Champion (Approved)</span>`;
     els.promptVersionTag.className = "badge badge-success";
   } else {
     els.promptStatusPill.textContent = `איטרציה ${state.iteration_count || 1}`;
@@ -894,8 +1212,11 @@ function renderPromptTab(session) {
     els.compilationCheckBox.classList.add("hidden");
   }
 
-  els.promptFormattedView.innerHTML = renderStructuredMarkdown(promptText);
-  els.promptRawView.textContent = state.champion_prompt || state.challenger_prompt || promptText;
+  els.promptFormattedView.innerHTML = renderStructuredMarkdown(displayedContent);
+  els.promptRawView.textContent =
+    activeArtifactFile === "__primary__"
+      ? state.champion_prompt || state.challenger_prompt || displayedContent
+      : displayedContent;
 }
 
 function renderBlueprintTab(session) {
@@ -920,8 +1241,8 @@ function renderBlueprintTab(session) {
     } else {
       els.blueprintEmptyState.innerHTML = `
         <div class="empty-illustration">${ICONS.cpuLg}</div>
-        <h3>תוכנית האב (<code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>) טרם הופקה</h3>
-        <p>השלם את שאלות המיקוד בראיון עם <code class="tech-token" dir="ltr">The Helper</code> כדי לחלץ את המודולים הקוגניטיביים וחוקי הפעולה.</p>
+        <h3>תוכנית האב (<code class="tech-token" dir="ltr">&lt;ARTIFACT_BLUEPRINT&gt;</code>) טרם הופקה</h3>
+        <p>השלם את שאלות המיקוד בראיון עם <code class="tech-token" dir="ltr">The Helper</code> כדי לחלץ את הגדרות היעד, הטריגרים וחוזה הפלט.</p>
       `;
     }
     return;
@@ -930,17 +1251,37 @@ function renderBlueprintTab(session) {
   els.blueprintEmptyState.classList.add("hidden");
   els.blueprintContainer.classList.remove("hidden");
   els.copyXmlBtn.disabled = false;
-  els.bpVersionText.textContent = `V${parsed.version || "1.0"}`;
+  els.bpVersionText.textContent = `V${parsed.version || "2.0"}`;
 
-  const cardDefs = [
-    { key: "title", icon: ICONS.target, label: "Title (פרסונה ותפקיד)", full: false },
-    { key: "tone", icon: ICONS.mic, label: "Tone (סגנון דיבור)", full: false },
-    { key: "domain_expertise", icon: ICONS.cpu, label: "Domain Expertise (תחומי מומחיות)", full: false },
-    { key: "cognitive_modules", icon: ICONS.sliders, label: "Cognitive Modules (מודולים קוגניטיביים)", full: false },
-    { key: "workflow", icon: ICONS.workflow, label: "Workflow (תהליך עבודה מובנה)", full: true },
-    { key: "negative_constraints", icon: ICONS.ban, label: "Negative Constraints (איסורים ומגבלות)", full: true },
-    { key: "output_format", icon: ICONS.fileText, label: "Output Format (תבנית פלט)", full: true },
-  ];
+  const isV2 = Boolean(
+    parsed.target_type || parsed.role_title || parsed.description_and_triggers || parsed.core_workflow
+  );
+
+  const cardDefs = isV2
+    ? [
+        { key: "target_type", icon: ICONS.layers, label: "Target Type (סוג תוצר)", full: false },
+        { key: "slug_name", icon: ICONS.cpu, label: "Slug Name (מזהה חבילה)", full: false },
+        { key: "role_title", icon: ICONS.target, label: "Role Title (פרסונה ותפקיד)", full: false },
+        { key: "tone_and_language", icon: ICONS.mic, label: "Tone & Language (טון ושפה)", full: false },
+        { key: "epistemic_stance", icon: ICONS.sliders, label: "Epistemic Stance (עמדה אפיסטמית)", full: true },
+        { key: "description_and_triggers", icon: ICONS.zap, label: "Description & Triggers (טריגרי הפעלה)", full: true },
+        { key: "negative_triggers", icon: ICONS.ban, label: "Negative Triggers (מתי לא להפעיל)", full: true },
+        { key: "clarification_gate", icon: ICONS.shield, label: "Clarification Gate (שער הבהרות)", full: true },
+        { key: "core_workflow", icon: ICONS.workflow, label: "Core Workflow (תהליך ביצוע)", full: true },
+        { key: "progressive_disclosure_refs", icon: ICONS.layers, label: "Progressive Disclosure Refs (קבצי עזר)", full: false },
+        { key: "verification_rubric", icon: ICONS.check, label: "Verification Rubric (אימות פנימי)", full: false },
+        { key: "format_spec", icon: ICONS.fileText, label: "Format Spec (מפרט פלט)", full: true },
+        { key: "guardrails", icon: ICONS.alert, label: "Guardrails (שומרי סף)", full: true },
+      ]
+    : [
+        { key: "title", icon: ICONS.target, label: "Title (פרסונה ותפקיד)", full: false },
+        { key: "tone", icon: ICONS.mic, label: "Tone (סגנון דיבור)", full: false },
+        { key: "domain_expertise", icon: ICONS.cpu, label: "Domain Expertise (תחומי מומחיות)", full: false },
+        { key: "cognitive_modules", icon: ICONS.sliders, label: "Cognitive Modules (מודולים קוגניטיביים)", full: false },
+        { key: "workflow", icon: ICONS.workflow, label: "Workflow (תהליך עבודה מובנה)", full: true },
+        { key: "negative_constraints", icon: ICONS.ban, label: "Negative Constraints (איסורים ומגבלות)", full: true },
+        { key: "output_format", icon: ICONS.fileText, label: "Output Format (תבנית פלט)", full: true },
+      ];
 
   els.bpCardsGrid.innerHTML = "";
   cardDefs.forEach((def) => {
@@ -958,10 +1299,73 @@ function renderBlueprintTab(session) {
   els.xmlRawViewer.textContent = rawXml;
 }
 
+function renderDecisionRubricCard(session) {
+  if (!els.decisionRubricCard) return;
+  const scores = session.rubric_scores || session.state?.rubric_scores || {};
+  if (!scores.used_decision_model) {
+    els.decisionRubricCard.classList.add("hidden");
+    return;
+  }
+
+  const dims = [
+    { key: "intent_alignment", label: "Intent Alignment" },
+    { key: "token_density_no_bloat", label: "Token Density" },
+    { key: "trigger_precision", label: "Trigger Precision" },
+    { key: "progressive_disclosure", label: "Progressive Disclosure" },
+    { key: "actionable_clarity", label: "Actionable Clarity" },
+    { key: "output_contract_strength", label: "Output Contract" },
+  ];
+
+  const avgPct = Math.round(Number(scores.weighted_average || 0) * 100);
+  const avgClass = avgPct >= 88 ? "badge-success" : avgPct >= 70 ? "badge-warning" : "badge-neutral";
+  const beats = Number(scores.challenger_beats_champion ?? 1);
+  const beatsBadge =
+    (session.state?.iteration_count || 0) > 1
+      ? `<span class="badge ${beats >= 0.5 ? "badge-success" : "badge-warning"}">${
+          beats >= 0.5 ? "Challenger > Champion" : "No Improvement"
+        }</span>`
+      : "";
+
+  const barsHtml = dims
+    .map((d) => {
+      const val = Number(scores[d.key] || 0);
+      const pct = Math.max(0, Math.min(100, Math.round((val / 5.0) * 100)));
+      const fillCls = val >= 4.0 ? "high" : val >= 3.0 ? "warn" : "low";
+      return `
+        <div class="rubric-dim-row" dir="ltr">
+          <div class="rubric-dim-top">
+            <span class="rubric-dim-name">${escapeHtml(d.label)}</span>
+            <span class="rubric-dim-score">${val.toFixed(1)} / 5</span>
+          </div>
+          <div class="rubric-progress-track">
+            <div class="rubric-progress-fill ${fillCls}" style="width: ${pct}%"></div>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+
+  els.decisionRubricCard.classList.remove("hidden");
+  els.decisionRubricCard.innerHTML = `
+    <div class="rubric-card-header">
+      <div class="rubric-card-title">
+        ${ICONS.shield}
+        <span>ניקוד רובריקה כמותי (<code class="tech-token" dir="ltr">gemini-decision-1</code>)</span>
+      </div>
+      <div class="rubric-summary-badges">
+        ${beatsBadge}
+        <span class="badge ${avgClass} mono-text">ציון משוקלל: ${avgPct}%</span>
+      </div>
+    </div>
+    <div class="rubric-bars-grid">${barsHtml}</div>
+  `;
+}
+
 function renderQATab(session) {
   const state = session.state || {};
   const logs = state.error_log || [];
   els.qaCountPill.textContent = String(logs.length);
+  renderDecisionRubricCard(session);
 
   if (logs.length === 0) {
     els.qaLogsList.innerHTML = `

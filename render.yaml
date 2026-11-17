@@ -10,3 +10,11 @@ services:
         value: 3.11.9
       - key: GOOGLE_API_KEY
         sync: false
+      - key: FAST_MODEL
+        value: gemini-4-hydrogen
+      - key: COMPILER_MODEL
+        value: gemini-4-argon
+      - key: DECISION_MODEL
+        value: gemini-decision-1
+      - key: DB_PATH
+        value: betterbot_history.db
