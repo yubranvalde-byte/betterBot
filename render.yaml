@@ -18,3 +18,5 @@ services:
         value: gemini-decision-1
       - key: DB_PATH
         value: betterbot_history.db
+      - key: MASTER_WORKSPACE_KEY
+        sync: false

@@ -3073,3 +3073,224 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================
+   Workspace Isolation, Master Sync Modal & Backup Controls
+   ========================================== */
+.workspace-sync-btn {
+  gap: 6px;
+  font-size: 0.75rem;
+}
+
+.workspace-sync-btn.is-master {
+  border-color: rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--text-primary);
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.18), var(--highlight-top);
+}
+
+.workspace-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.workspace-sync-btn.is-master .workspace-status-dot {
+  background: var(--status-pass);
+  box-shadow: 0 0 8px var(--status-pass);
+}
+
+.workspace-master-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--status-pass-bg);
+  color: var(--status-pass);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+@media (max-width: 1260px) {
+  .workspace-sync-label {
+    display: none;
+  }
+}
+
+.history-popover-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: rgba(11, 13, 19, 0.65);
+}
+
+.history-popover-footer .btn {
+  flex: 1;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 115;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(6, 8, 13, 0.72);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.workspace-modal {
+  width: min(500px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  background: rgba(18, 22, 33, 0.97);
+  border: 1px solid var(--border-highlight);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-elevated);
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  box-shadow: var(--highlight-top);
+}
+
+.workspace-modal-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-hover);
+}
+
+.workspace-modal-title-group h3 {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workspace-modal-body {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.workspace-status-card {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-status-row,
+.workspace-uuid-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-status-label {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.workspace-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-section h4 {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.workspace-section-desc {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.workspace-hint-box {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--status-warn-bg);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #FDE68A;
+  font-size: 0.77rem;
+  line-height: 1.5;
+}
+
+.workspace-key-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-key-input {
+  flex: 1;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-canvas);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  outline: none;
+}
+
+.workspace-key-input:focus {
+  border-color: var(--accent-primary);
+}
+
+.workspace-feedback {
+  font-size: 0.76rem;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.workspace-feedback.error {
+  background: var(--status-fail-bg);
+  border: 1px solid rgba(244, 63, 94, 0.35);
+  color: #FDA4AF;
+}
+
+.workspace-feedback.success {
+  background: var(--status-pass-bg);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #6EE7B7;
+}
+
+.workspace-active-actions,
+.workspace-backup-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-backup-actions .btn {
+  flex: 1;
+}

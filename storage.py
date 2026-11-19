@@ -2,6 +2,7 @@ import json
 import os
 import sqlite3
 import tempfile
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,6 +49,13 @@ def _get_conn() -> Iterator[sqlite3.Connection]:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _require_owner_id(owner_id: str) -> str:
+    clean = (owner_id or "").strip()
+    if not clean:
+        raise ValueError("owner_id is required")
+    return clean
 
 
 def _extract_metadata(session_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -106,12 +114,13 @@ def _migrate_snapshot_if_present(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     """
                     INSERT INTO sessions (
-                        session_id, title, target_type, status,
+                        session_id, owner_id, title, target_type, status,
                         created_at, updated_at, state_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         sid,
+                        "master",
                         meta["title"],
                         meta["target_type"],
                         meta["status"],
@@ -126,12 +135,13 @@ def _migrate_snapshot_if_present(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """Initializes the SQLite sessions table and migrates legacy JSON snapshots if found."""
+    """Initializes the SQLite sessions table, runs idempotent migrations, and imports legacy JSON snapshots."""
     with _get_conn() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL DEFAULT 'master',
                 title TEXT NOT NULL,
                 target_type TEXT NOT NULL DEFAULT 'SYSTEM_PROMPT',
                 status TEXT NOT NULL DEFAULT 'idle',
@@ -141,39 +151,65 @@ def init_db() -> None:
             )
             """
         )
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "owner_id" not in existing_cols:
+            conn.execute(
+                "ALTER TABLE sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'master'"
+            )
+        conn.execute(
+            "UPDATE sessions SET owner_id = 'master' WHERE owner_id IS NULL OR TRIM(owner_id) = ''"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_owner_updated ON sessions(owner_id, updated_at DESC)"
         )
         conn.commit()
         _migrate_snapshot_if_present(conn)
 
 
-def save_session(session_id: str, session_data: Dict[str, Any]) -> None:
-    """Persists or updates a complete BetterBot session in SQLite."""
+def save_session(session_id: str, session_data: Dict[str, Any], owner_id: str) -> None:
+    """Persists or updates a complete BetterBot session in SQLite, scoped to owner_id."""
+    owner = _require_owner_id(owner_id)
+    if not (session_id or "").strip():
+        raise ValueError("session_id is required")
+
     now_iso = _utc_now_iso()
     created_iso = session_data.get("created_at_iso") or now_iso
     session_data["created_at_iso"] = created_iso
     session_data["updated_at_iso"] = now_iso
 
-    meta = _extract_metadata(session_data)
-    serialized = json.dumps(session_data, ensure_ascii=False)
+    payload_to_store = {k: v for k, v in session_data.items() if k != "owner_id"}
+    meta = _extract_metadata(payload_to_store)
+    serialized = json.dumps(payload_to_store, ensure_ascii=False)
 
     with _get_conn() as conn:
-        conn.execute(
+        existing = conn.execute(
+            "SELECT owner_id FROM sessions WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if existing and existing["owner_id"] != owner:
+            raise PermissionError("Session belongs to another workspace")
+
+        cur = conn.execute(
             """
             INSERT INTO sessions (
-                session_id, title, target_type, status,
+                session_id, owner_id, title, target_type, status,
                 created_at, updated_at, state_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 title = excluded.title,
                 target_type = excluded.target_type,
                 status = excluded.status,
                 updated_at = excluded.updated_at,
                 state_json = excluded.state_json
+            WHERE sessions.owner_id = excluded.owner_id
             """,
             (
                 session_id,
+                owner,
                 meta["title"],
                 meta["target_type"],
                 meta["status"],
@@ -182,20 +218,25 @@ def save_session(session_id: str, session_data: Dict[str, Any]) -> None:
                 serialized,
             ),
         )
+        if cur.rowcount == 0:
+            raise PermissionError("Session belongs to another workspace")
         conn.commit()
 
 
-def load_session(session_id: str) -> Optional[Dict[str, Any]]:
-    """Loads and deserializes a single session by session_id."""
+def load_session(session_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+    """Loads and deserializes a single session scoped to owner_id."""
+    owner = _require_owner_id(owner_id)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM sessions WHERE session_id = ?", (session_id,)
+            "SELECT * FROM sessions WHERE session_id = ? AND owner_id = ?",
+            (session_id, owner),
         ).fetchone()
     if not row:
         return None
     try:
         data = json.loads(row["state_json"])
         if isinstance(data, dict):
+            data.pop("owner_id", None)
             data.setdefault("session_id", row["session_id"])
             data["title"] = row["title"]
             data["created_at_iso"] = row["created_at"]
@@ -206,15 +247,18 @@ def load_session(session_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def list_sessions() -> List[Dict[str, Any]]:
-    """Returns metadata for all saved creations ordered by updated_at DESC."""
+def list_sessions(owner_id: str) -> List[Dict[str, Any]]:
+    """Returns metadata for saved creations owned by owner_id ordered by updated_at DESC."""
+    owner = _require_owner_id(owner_id)
     with _get_conn() as conn:
         rows = conn.execute(
             """
             SELECT session_id, title, target_type, status, created_at, updated_at, state_json
             FROM sessions
+            WHERE owner_id = ?
             ORDER BY updated_at DESC
-            """
+            """,
+            (owner,),
         ).fetchall()
 
     results: List[Dict[str, Any]] = []
@@ -242,27 +286,177 @@ def list_sessions() -> List[Dict[str, Any]]:
     return results
 
 
-def rename_session(session_id: str, new_title: str) -> Optional[Dict[str, Any]]:
-    """Updates a session's title and marks it as manually named."""
+def rename_session(
+    session_id: str, new_title: str, owner_id: str
+) -> Optional[Dict[str, Any]]:
+    """Updates a session's title and marks it as manually named within owner_id."""
+    owner = _require_owner_id(owner_id)
     clean_title = (new_title or "").strip()
     if not clean_title:
         return None
 
-    sess = load_session(session_id)
+    sess = load_session(session_id, owner)
     if not sess:
         return None
 
     sess["title"] = clean_title
     sess["title_manually_set"] = True
-    save_session(session_id, sess)
+    save_session(session_id, sess, owner)
     return sess
 
 
-def delete_session(session_id: str) -> bool:
-    """Deletes a session from persistent SQLite storage."""
+def delete_session(session_id: str, owner_id: str) -> bool:
+    """Deletes a session from persistent SQLite storage scoped to owner_id."""
+    owner = _require_owner_id(owner_id)
     with _get_conn() as conn:
         cur = conn.execute(
-            "DELETE FROM sessions WHERE session_id = ?", (session_id,)
+            "DELETE FROM sessions WHERE session_id = ? AND owner_id = ?",
+            (session_id, owner),
         )
         conn.commit()
         return cur.rowcount > 0
+
+
+def export_workspace_sessions(owner_id: str) -> List[Dict[str, Any]]:
+    """Exports all full session objects owned by owner_id for portable JSON backup."""
+    owner = _require_owner_id(owner_id)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT session_id, title, target_type, status, created_at, updated_at, state_json
+            FROM sessions
+            WHERE owner_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (owner,),
+        ).fetchall()
+
+    exported: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            data = json.loads(row["state_json"])
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        data.pop("owner_id", None)
+        data["session_id"] = row["session_id"]
+        data["title"] = row["title"]
+        data["target_type"] = row["target_type"] or data.get("target_type") or "SYSTEM_PROMPT"
+        data["status"] = row["status"] or data.get("status") or "idle"
+        data["created_at_iso"] = row["created_at"]
+        data["updated_at_iso"] = row["updated_at"]
+        exported.append(data)
+    return exported
+
+
+def import_workspace_sessions(owner_id: str, sessions_payload: Any) -> Dict[str, int]:
+    """Imports a JSON bundle or list of sessions into owner_id with conflict handling."""
+    owner = _require_owner_id(owner_id)
+
+    if isinstance(sessions_payload, dict):
+        raw_sessions = sessions_payload.get("sessions")
+    elif isinstance(sessions_payload, list):
+        raw_sessions = sessions_payload
+    else:
+        raw_sessions = None
+
+    if not isinstance(raw_sessions, list):
+        raise ValueError(
+            "Invalid sessions payload: expected a list or an object containing a 'sessions' list"
+        )
+
+    created = 0
+    updated = 0
+    remapped = 0
+    skipped = 0
+
+    with _get_conn() as conn:
+        for item in raw_sessions:
+            if not isinstance(item, dict):
+                skipped += 1
+                continue
+
+            sess = dict(item)
+            sess.pop("owner_id", None)
+
+            raw_sid = sess.get("session_id")
+            sid = raw_sid.strip() if isinstance(raw_sid, str) else ""
+            if not sid or len(sid) > 128 or "/" in sid or "\\" in sid or ".." in sid:
+                sid = uuid.uuid4().hex[:12]
+
+            existing = conn.execute(
+                "SELECT owner_id FROM sessions WHERE session_id = ?", (sid,)
+            ).fetchone()
+
+            if existing and existing["owner_id"] != owner:
+                while True:
+                    candidate = uuid.uuid4().hex[:12]
+                    clash = conn.execute(
+                        "SELECT 1 FROM sessions WHERE session_id = ?", (candidate,)
+                    ).fetchone()
+                    if not clash:
+                        sid = candidate
+                        break
+                remapped += 1
+                existing = None
+
+            sess["session_id"] = sid
+            if not isinstance(sess.get("state"), dict):
+                sess["state"] = {}
+            if not isinstance(sess.get("chat_history"), list):
+                sess["chat_history"] = []
+            if not isinstance(sess.get("timeline"), list):
+                sess["timeline"] = []
+
+            now_iso = _utc_now_iso()
+            created_iso = str(sess.get("created_at_iso") or now_iso)
+            updated_iso = str(sess.get("updated_at_iso") or now_iso)
+            sess["created_at_iso"] = created_iso
+            sess["updated_at_iso"] = updated_iso
+
+            meta = _extract_metadata(sess)
+            serialized = json.dumps(sess, ensure_ascii=False)
+
+            cur = conn.execute(
+                """
+                INSERT INTO sessions (
+                    session_id, owner_id, title, target_type, status,
+                    created_at, updated_at, state_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id) DO UPDATE SET
+                    title = excluded.title,
+                    target_type = excluded.target_type,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at,
+                    state_json = excluded.state_json
+                WHERE sessions.owner_id = excluded.owner_id
+                """,
+                (
+                    sid,
+                    owner,
+                    meta["title"],
+                    meta["target_type"],
+                    meta["status"],
+                    created_iso,
+                    updated_iso,
+                    serialized,
+                ),
+            )
+            if cur.rowcount == 0:
+                raise PermissionError("Session belongs to another workspace")
+
+            if existing:
+                updated += 1
+            else:
+                created += 1
+
+        conn.commit()
+
+    return {
+        "imported": created + updated,
+        "created": created,
+        "updated": updated,
+        "remapped": remapped,
+        "skipped": skipped,
+    }

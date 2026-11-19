@@ -14,10 +14,14 @@ let activeArtifactFile = "__primary__";
 let cachedSessionsList = [];
 let historyFilterType = "ALL";
 let historySearchQuery = "";
+let isMasterMode = false;
+let isMasterConfigured = null;
 
 const STORAGE_KEYS = {
   ACTIVE_SESSION_ID: "betterbot_active_session_id",
   ACTIVE_VIEW: "betterbot_active_view",
+  WORKSPACE_ID: "betterbot_workspace_id",
+  MASTER_KEY: "betterbot_master_key",
 };
 
 const ICONS = {
@@ -138,14 +142,257 @@ const els = {
   timelineSearchInput: document.getElementById("timelineSearchInput"),
   timelineList: document.getElementById("timelineList"),
   toast: document.getElementById("toast"),
+
+  workspaceSyncBtn: document.getElementById("workspaceSyncBtn"),
+  workspaceSyncBtnLabel: document.getElementById("workspaceSyncBtnLabel"),
+  workspaceMasterPill: document.getElementById("workspaceMasterPill"),
+  historyWorkspaceHint: document.getElementById("historyWorkspaceHint"),
+  historyExportJsonBtn: document.getElementById("historyExportJsonBtn"),
+  historyImportJsonBtn: document.getElementById("historyImportJsonBtn"),
+
+  workspaceSyncModal: document.getElementById("workspaceSyncModal"),
+  workspaceSyncCloseBtn: document.getElementById("workspaceSyncCloseBtn"),
+  workspaceModeBadge: document.getElementById("workspaceModeBadge"),
+  workspaceUuidRow: document.getElementById("workspaceUuidRow"),
+  workspaceUuidText: document.getElementById("workspaceUuidText"),
+  copyWorkspaceUuidBtn: document.getElementById("copyWorkspaceUuidBtn"),
+  masterUnconfiguredHint: document.getElementById("masterUnconfiguredHint"),
+  masterKeyForm: document.getElementById("masterKeyForm"),
+  masterKeyInput: document.getElementById("masterKeyInput"),
+  masterKeySubmitBtn: document.getElementById("masterKeySubmitBtn"),
+  masterKeyFeedback: document.getElementById("masterKeyFeedback"),
+  masterActiveActions: document.getElementById("masterActiveActions"),
+  masterDisconnectBtn: document.getElementById("masterDisconnectBtn"),
+  exportWorkspaceBtn: document.getElementById("exportWorkspaceBtn"),
+  importWorkspaceBtn: document.getElementById("importWorkspaceBtn"),
+  importWorkspaceFileInput: document.getElementById("importWorkspaceFileInput"),
 };
+
+// ==========================================
+// Workspace Isolation & Auth Helpers
+// ==========================================
+function generateUUID() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+function getOrCreateWorkspaceId() {
+  let wid = (localStorage.getItem(STORAGE_KEYS.WORKSPACE_ID) || "").trim();
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!wid || !uuidPattern.test(wid)) {
+    wid = generateUUID();
+    localStorage.setItem(STORAGE_KEYS.WORKSPACE_ID, wid);
+  }
+  return wid;
+}
+
+function getStoredMasterKey() {
+  return (localStorage.getItem(STORAGE_KEYS.MASTER_KEY) || "").trim();
+}
+
+function buildWorkspaceHeaders(extraHeaders = {}) {
+  const headers = { ...extraHeaders };
+  headers["X-Workspace-ID"] = getOrCreateWorkspaceId();
+  const masterKey = getStoredMasterKey();
+  if (masterKey) {
+    headers["X-Master-Key"] = masterKey;
+  }
+  return headers;
+}
+
+async function apiFetch(url, options = {}) {
+  const mergedHeaders = buildWorkspaceHeaders(options.headers || {});
+  return fetch(url, {
+    ...options,
+    headers: mergedHeaders,
+  });
+}
+
+function updateWorkspaceSyncUI() {
+  const wid = getOrCreateWorkspaceId();
+  if (els.workspaceSyncBtn) {
+    els.workspaceSyncBtn.classList.toggle("is-master", isMasterMode);
+  }
+  if (els.workspaceMasterPill) {
+    els.workspaceMasterPill.classList.toggle("hidden", !isMasterMode);
+  }
+  if (els.historyWorkspaceHint) {
+    els.historyWorkspaceHint.textContent = isMasterMode ? "מרחב Master מסונכרן" : "מרחב אישי מבודד";
+  }
+  if (els.workspaceModeBadge) {
+    els.workspaceModeBadge.className = isMasterMode ? "badge badge-success" : "badge badge-neutral";
+    els.workspaceModeBadge.textContent = isMasterMode
+      ? "Master Mode פעיל (מסונכרן)"
+      : "מרחב אנונימי מבודד";
+  }
+  if (els.workspaceUuidText) {
+    els.workspaceUuidText.textContent = wid;
+  }
+  if (els.workspaceUuidRow) {
+    els.workspaceUuidRow.classList.toggle("hidden", isMasterMode);
+  }
+  if (els.masterKeyForm) {
+    els.masterKeyForm.classList.toggle("hidden", isMasterMode);
+  }
+  if (els.masterActiveActions) {
+    els.masterActiveActions.classList.toggle("hidden", !isMasterMode);
+  }
+  if (els.masterUnconfiguredHint) {
+    const showUnconfigured = !isMasterMode && isMasterConfigured === false;
+    els.masterUnconfiguredHint.classList.toggle("hidden", !showUnconfigured);
+  }
+}
+
+function showMasterKeyFeedback(message, isError = true) {
+  if (!els.masterKeyFeedback) return;
+  if (!message) {
+    els.masterKeyFeedback.classList.add("hidden");
+    els.masterKeyFeedback.textContent = "";
+    return;
+  }
+  els.masterKeyFeedback.textContent = message;
+  els.masterKeyFeedback.className = `workspace-feedback ${isError ? "error" : "success"}`;
+}
+
+async function initWorkspaceAuth() {
+  getOrCreateWorkspaceId();
+  const storedKey = getStoredMasterKey();
+  if (storedKey) {
+    try {
+      const res = await fetch("/api/workspace/verify-master", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: storedKey }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        isMasterConfigured = Boolean(data.configured);
+        if (data.authorized) {
+          isMasterMode = true;
+        } else {
+          localStorage.removeItem(STORAGE_KEYS.MASTER_KEY);
+          isMasterMode = false;
+          showToast("מפתח ה-Master השמור אינו תקף — חזרת למרחב אנונימי", "alert");
+        }
+      }
+    } catch (err) {
+      console.warn("Workspace auth verification failed:", err);
+    }
+  } else {
+    isMasterMode = false;
+  }
+  updateWorkspaceSyncUI();
+}
+
+async function openWorkspaceSyncModal() {
+  if (!els.workspaceSyncModal) return;
+  showMasterKeyFeedback("");
+  if (els.masterKeyInput) els.masterKeyInput.value = "";
+  updateWorkspaceSyncUI();
+  els.workspaceSyncModal.classList.remove("hidden");
+
+  if (!isMasterMode && isMasterConfigured === null) {
+    try {
+      const res = await fetch("/api/workspace/verify-master", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: "" }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        isMasterConfigured = Boolean(data.configured);
+        updateWorkspaceSyncUI();
+      }
+    } catch (err) {
+      console.warn("Could not check master configuration status:", err);
+    }
+  }
+}
+
+function closeWorkspaceSyncModal() {
+  if (!els.workspaceSyncModal) return;
+  els.workspaceSyncModal.classList.add("hidden");
+}
+
+async function reloadWorkspaceState(resetActiveSession = true) {
+  if (resetActiveSession) {
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
+    currentSession = null;
+  }
+  if (els.historyLibraryPopover) {
+    els.historyLibraryPopover.classList.add("hidden");
+  }
+  await initSession();
+  await refreshBettyHistory();
+}
+
+async function exportWorkspaceHistory() {
+  try {
+    const res = await apiFetch("/api/workspace/export");
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    let filename = `betterbot-history-${isMasterMode ? "master" : "workspace"}.json`;
+    const disp = res.headers.get("Content-Disposition") || "";
+    const match = disp.match(/filename="?([^";]+)"?/i);
+    if (match && match[1]) {
+      filename = match[1];
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("היסטוריית מרחב העבודה יוצאה בהצלחה (JSON)", "download");
+  } catch (err) {
+    showToast(`שגיאה בייצוא ההיסטוריה: ${err.message}`, "alert");
+  }
+}
+
+async function importWorkspaceHistory(file) {
+  if (!file) return;
+  if (isStreaming) {
+    showToast("יש להמתין לסיום ההרצה הפעילה לפני ייבוא היסטוריה", "alert");
+    return;
+  }
+  try {
+    const text = await file.text();
+    const parsed = JSON.parse(text);
+    const res = await apiFetch("/api/workspace/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      throw new Error(errBody.detail || `HTTP ${res.status}`);
+    }
+    const summary = await res.json();
+    closeWorkspaceSyncModal();
+    await reloadWorkspaceState(false);
+    showToast(`יובאו ${summary.imported ?? 0} סשנים בהצלחה למרחב העבודה`, "check");
+  } catch (err) {
+    showToast(`שגיאה בייבוא קובץ JSON: ${err.message}`, "alert");
+  }
+}
 
 // ==========================================
 // Initialization
 // ==========================================
 document.addEventListener("DOMContentLoaded", async () => {
   bindUIEvents();
-  initBettyWidget();
+  await initWorkspaceAuth();
+  await initBettyWidget();
   await checkHealth();
   await initSession();
   // Keep-Alive heartbeat every 4 minutes so Render free-tier containers stay warm while open
@@ -165,7 +412,10 @@ async function checkHealth() {
 }
 
 async function initSession() {
-  const listRes = await fetch("/api/sessions");
+  const listRes = await apiFetch("/api/sessions");
+  if (!listRes.ok) {
+    throw new Error(`HTTP ${listRes.status}`);
+  }
   const listData = await listRes.json();
   cachedSessionsList = listData.sessions || [];
 
@@ -188,7 +438,20 @@ async function initSession() {
 
 async function loadSessionById(sessionId, closeHistory = true) {
   if (!sessionId || isStreaming) return;
-  const res = await fetch(`/api/sessions/${sessionId}`);
+  const res = await apiFetch(`/api/sessions/${sessionId}`);
+  if (!res.ok) {
+    if (res.status === 404) {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
+      await refreshSessionSelector();
+      if (cachedSessionsList.length > 0) {
+        await loadSessionById(cachedSessionsList[0].session_id, closeHistory);
+      } else {
+        await createNewSession();
+      }
+      return;
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }
   currentSession = await res.json();
   activeArtifactFile = "__primary__";
   localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
@@ -201,7 +464,10 @@ async function loadSessionById(sessionId, closeHistory = true) {
 
 async function createNewSession() {
   if (isStreaming) return;
-  const res = await fetch("/api/sessions", { method: "POST" });
+  const res = await apiFetch("/api/sessions", { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`HTTP ${res.status}`);
+  }
   currentSession = await res.json();
   activeArtifactFile = "__primary__";
   localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
@@ -212,7 +478,8 @@ async function createNewSession() {
 }
 
 async function refreshSessionSelector() {
-  const res = await fetch("/api/sessions");
+  const res = await apiFetch("/api/sessions");
+  if (!res.ok) return;
   const data = await res.json();
   cachedSessionsList = data.sessions || [];
 
@@ -287,7 +554,7 @@ function renderHistoryLibraryList() {
       e.stopPropagation();
       const nextTitle = window.prompt("הזן שם חדש ליצירה:", s.title || "");
       if (!nextTitle || !nextTitle.trim()) return;
-      const resp = await fetch(`/api/sessions/${s.session_id}`, {
+      const resp = await apiFetch(`/api/sessions/${s.session_id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: nextTitle.trim() }),
@@ -305,7 +572,7 @@ function renderHistoryLibraryList() {
     item.querySelector(".history-action-btn.delete").addEventListener("click", async (e) => {
       e.stopPropagation();
       if (!window.confirm(`למחוק את "${s.title}" מההיסטוריה?`)) return;
-      const resp = await fetch(`/api/sessions/${s.session_id}`, { method: "DELETE" });
+      const resp = await apiFetch(`/api/sessions/${s.session_id}`, { method: "DELETE" });
       if (resp.ok) {
         if (currentSession && currentSession.session_id === s.session_id) {
           localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
@@ -589,13 +856,32 @@ function bindUIEvents() {
 
   // Download Full Package .ZIP
   if (els.downloadZipBtn) {
-    els.downloadZipBtn.addEventListener("click", () => {
+    els.downloadZipBtn.addEventListener("click", async () => {
       if (!currentSession?.session_id) return;
-      const a = document.createElement("a");
-      a.href = `/api/sessions/${currentSession.session_id}/download`;
-      a.download = `${currentSession.slug_name || currentSession.session_id}.zip`;
-      a.click();
-      showToast("מוריד חבילה מלאה (.ZIP)...", "download");
+      try {
+        const res = await apiFetch(`/api/sessions/${currentSession.session_id}/download`);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const blob = await res.blob();
+        let filename = `${currentSession.slug_name || currentSession.session_id}.zip`;
+        const disp = res.headers.get("Content-Disposition") || "";
+        const match = disp.match(/filename="?([^";]+)"?/i);
+        if (match && match[1]) {
+          filename = match[1];
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        showToast("החבילה (.ZIP) ירדה בהצלחה", "download");
+      } catch (err) {
+        showToast(`שגיאה בהורדת החבילה: ${err.message}`, "alert");
+      }
     });
   }
 
@@ -606,6 +892,131 @@ function bindUIEvents() {
     navigator.clipboard.writeText(xml);
     showToast("קוד ה-XML Blueprint הועתק ללוח", "check");
   });
+
+  // Workspace Sync Modal & JSON Portability
+  if (els.workspaceSyncBtn) {
+    els.workspaceSyncBtn.addEventListener("click", openWorkspaceSyncModal);
+  }
+  if (els.workspaceSyncCloseBtn) {
+    els.workspaceSyncCloseBtn.addEventListener("click", closeWorkspaceSyncModal);
+  }
+  if (els.workspaceSyncModal) {
+    els.workspaceSyncModal.addEventListener("click", (e) => {
+      if (e.target === els.workspaceSyncModal) {
+        closeWorkspaceSyncModal();
+      }
+    });
+  }
+  document.addEventListener("keydown", (e) => {
+    if (
+      e.key === "Escape" &&
+      els.workspaceSyncModal &&
+      !els.workspaceSyncModal.classList.contains("hidden")
+    ) {
+      closeWorkspaceSyncModal();
+    }
+  });
+
+  if (els.copyWorkspaceUuidBtn) {
+    els.copyWorkspaceUuidBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(getOrCreateWorkspaceId());
+      showToast("מזהה מרחב העבודה הועתק ללוח", "check");
+    });
+  }
+
+  if (els.masterKeyForm) {
+    els.masterKeyForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (isStreaming) {
+        showMasterKeyFeedback("יש להמתין לסיום ההרצה הפעילה לפני החלפת מרחב עבודה", true);
+        return;
+      }
+      const key = (els.masterKeyInput?.value || "").trim();
+      if (!key) {
+        showMasterKeyFeedback("נא להזין מפתח Master", true);
+        return;
+      }
+      if (els.masterKeySubmitBtn) els.masterKeySubmitBtn.disabled = true;
+      showMasterKeyFeedback("");
+      try {
+        const res = await fetch("/api/workspace/verify-master", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ key }),
+        });
+        const data = await res.json().catch(() => ({}));
+        isMasterConfigured = Boolean(data.configured);
+        if (!data.configured) {
+          updateWorkspaceSyncUI();
+          showMasterKeyFeedback("מפתח MASTER_WORKSPACE_KEY אינו מוגדר בשרת כרגע.", true);
+          return;
+        }
+        if (!data.authorized) {
+          updateWorkspaceSyncUI();
+          showMasterKeyFeedback("המפתח שהוזן שגוי.", true);
+          return;
+        }
+        localStorage.setItem(STORAGE_KEYS.MASTER_KEY, key);
+        isMasterMode = true;
+        updateWorkspaceSyncUI();
+        closeWorkspaceSyncModal();
+        await reloadWorkspaceState(true);
+        showToast("מצב Master הופעל — היסטוריית הבעלים מסונכרנת", "check");
+      } catch (err) {
+        showMasterKeyFeedback(`שגיאת תקשורת: ${err.message}`, true);
+      } finally {
+        if (els.masterKeySubmitBtn) els.masterKeySubmitBtn.disabled = false;
+      }
+    });
+  }
+
+  if (els.masterDisconnectBtn) {
+    els.masterDisconnectBtn.addEventListener("click", async () => {
+      if (isStreaming) {
+        showToast("יש להמתין לסיום ההרצה הפעילה לפני ניתוק מ-Master", "alert");
+        return;
+      }
+      localStorage.removeItem(STORAGE_KEYS.MASTER_KEY);
+      isMasterMode = false;
+      updateWorkspaceSyncUI();
+      closeWorkspaceSyncModal();
+      await reloadWorkspaceState(true);
+      showToast("חזרת למרחב העבודה האנונימי המבודד", "check");
+    });
+  }
+
+  if (els.exportWorkspaceBtn) {
+    els.exportWorkspaceBtn.addEventListener("click", exportWorkspaceHistory);
+  }
+  if (els.historyExportJsonBtn) {
+    els.historyExportJsonBtn.addEventListener("click", exportWorkspaceHistory);
+  }
+
+  const triggerImportPicker = () => {
+    if (isStreaming) {
+      showToast("יש להמתין לסיום ההרצה הפעילה לפני ייבוא היסטוריה", "alert");
+      return;
+    }
+    if (els.importWorkspaceFileInput) {
+      els.importWorkspaceFileInput.value = "";
+      els.importWorkspaceFileInput.click();
+    }
+  };
+  if (els.importWorkspaceBtn) {
+    els.importWorkspaceBtn.addEventListener("click", triggerImportPicker);
+  }
+  if (els.historyImportJsonBtn) {
+    els.historyImportJsonBtn.addEventListener("click", triggerImportPicker);
+  }
+  if (els.importWorkspaceFileInput) {
+    els.importWorkspaceFileInput.addEventListener("change", async (e) => {
+      const file = e.target.files?.[0];
+      if (file) {
+        await importWorkspaceHistory(file);
+      }
+      e.target.value = "";
+    });
+  }
 }
 
 // ==========================================
@@ -623,7 +1034,7 @@ async function sendUserMessage(messageText) {
   appendOptimisticUserBubble(messageText);
 
   try {
-    let response = await fetch(`/api/sessions/${currentSession.session_id}/stream`, {
+    let response = await apiFetch(`/api/sessions/${currentSession.session_id}/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: messageText, mode: "auto" }),
@@ -631,9 +1042,9 @@ async function sendUserMessage(messageText) {
 
     // Auto-recover if server restarted and session ID was evicted
     if (response.status === 404) {
-      const res = await fetch("/api/sessions", { method: "POST" });
+      const res = await apiFetch("/api/sessions", { method: "POST" });
       currentSession = await res.json();
-      response = await fetch(`/api/sessions/${currentSession.session_id}/stream`, {
+      response = await apiFetch(`/api/sessions/${currentSession.session_id}/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: messageText, mode: "auto" }),
@@ -1681,6 +2092,20 @@ const BETTY_QUICK_SUGGESTIONS = {
   ],
 };
 
+async function refreshBettyHistory() {
+  try {
+    const res = await apiFetch("/api/betty/history");
+    if (res.ok) {
+      const data = await res.json();
+      bettyHistories.tech_support = data.tech_support || [];
+      bettyHistories.prompt_advisor = data.prompt_advisor || [];
+      renderBettyModeUI();
+    }
+  } catch (err) {
+    console.warn("Could not load Betty history:", err);
+  }
+}
+
 async function initBettyWidget() {
   const fab = document.getElementById("bettyFab");
   const win = document.getElementById("bettyWindow");
@@ -1694,19 +2119,7 @@ async function initBettyWidget() {
 
   if (!fab || !win) return;
 
-  // Fetch initial histories from backend
-  try {
-    const res = await fetch("/api/betty/history");
-    if (res.ok) {
-      const data = await res.json();
-      bettyHistories.tech_support = data.tech_support || [];
-      bettyHistories.prompt_advisor = data.prompt_advisor || [];
-    }
-  } catch (err) {
-    console.warn("Could not load Betty history:", err);
-  }
-
-  renderBettyModeUI();
+  await refreshBettyHistory();
 
   // Header Toggle Button opens/closes Betty Push Side-Panel
   fab.addEventListener("click", () => {
@@ -1762,7 +2175,7 @@ async function initBettyWidget() {
   clearBtn.addEventListener("click", async () => {
     if (isBettyLoading) return;
     try {
-      const res = await fetch("/api/betty/clear", {
+      const res = await apiFetch("/api/betty/clear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: bettyMode }),
@@ -1920,7 +2333,7 @@ async function sendBettyMessage(text) {
   renderBettyMessages();
 
   try {
-    const res = await fetch("/api/betty/chat", {
+    const res = await apiFetch("/api/betty/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import io
 import json
 import os
@@ -7,11 +8,11 @@ import tempfile
 import time
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -45,6 +46,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -64,38 +66,86 @@ async def add_no_cache_headers(request: Request, call_next):
 
 
 # ==========================================
-# Session Store (In-Memory + SQLite Persistent Storage)
+# Workspace Auth & Session Store (Multi-Tenant + SQLite Persistent Storage)
 # ==========================================
-SESSIONS: Dict[str, Dict[str, Any]] = {}
+MASTER_OWNER_ID = "master"
+UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+SESSIONS: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _get_master_workspace_key() -> str:
+    return (os.environ.get("MASTER_WORKSPACE_KEY") or "").strip()
+
+
+def _verify_master_key_value(candidate: str) -> Tuple[bool, bool]:
+    configured_key = _get_master_workspace_key()
+    if not configured_key:
+        return False, False
+    cleaned = (candidate or "").strip()
+    if not cleaned:
+        return False, True
+    return hmac.compare_digest(cleaned, configured_key), True
+
+
+def resolve_owner_id(request: Request) -> str:
+    master_candidate = (request.headers.get("X-Master-Key") or "").strip()
+    if master_candidate:
+        authorized, configured = _verify_master_key_value(master_candidate)
+        if authorized:
+            return MASTER_OWNER_ID
+        detail = (
+            "Master workspace key is not configured on the server"
+            if not configured
+            else "Invalid Master Workspace Key"
+        )
+        raise HTTPException(status_code=401, detail=detail)
+
+    raw_workspace_id = (
+        request.headers.get("X-Workspace-ID")
+        or request.query_params.get("workspace_id")
+        or ""
+    ).strip()
+
+    if not raw_workspace_id:
+        raise HTTPException(status_code=400, detail="Missing X-Workspace-ID")
+
+    if raw_workspace_id.lower() == MASTER_OWNER_ID:
+        raise HTTPException(
+            status_code=403,
+            detail="Master workspace requires valid X-Master-Key",
+        )
+
+    if not UUID_RE.match(raw_workspace_id):
+        raise HTTPException(status_code=400, detail="Invalid X-Workspace-ID format")
+
+    return str(uuid.UUID(raw_workspace_id))
 
 
 def init_storage_and_hydrate() -> None:
     storage.init_db()
-    for item in storage.list_sessions():
-        sid = item.get("session_id")
-        if sid and sid not in SESSIONS:
-            loaded = storage.load_session(sid)
-            if loaded:
-                SESSIONS[sid] = loaded
 
 
 init_storage_and_hydrate()
 
 
-def save_session_record(session_id: Optional[str] = None) -> None:
-    if session_id and session_id in SESSIONS:
-        storage.save_session(session_id, SESSIONS[session_id])
+def save_session_record(owner_id: str, session_id: Optional[str] = None) -> None:
+    if session_id and (owner_id, session_id) in SESSIONS:
+        storage.save_session(session_id, SESSIONS[(owner_id, session_id)], owner_id)
     elif session_id is None:
-        for sid, sess in SESSIONS.items():
-            storage.save_session(sid, sess)
+        for (oid, sid), sess in list(SESSIONS.items()):
+            if oid == owner_id:
+                storage.save_session(sid, sess, oid)
 
 
-def get_or_load_session(session_id: str) -> Optional[Dict[str, Any]]:
-    if session_id in SESSIONS:
-        return SESSIONS[session_id]
-    loaded = storage.load_session(session_id)
+def get_or_load_session(session_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
+    cache_key = (owner_id, session_id)
+    if cache_key in SESSIONS:
+        return SESSIONS[cache_key]
+    loaded = storage.load_session(session_id, owner_id)
     if loaded:
-        SESSIONS[session_id] = loaded
+        SESSIONS[cache_key] = loaded
         return loaded
     return None
 
@@ -107,6 +157,10 @@ class UserMessageRequest(BaseModel):
 
 class RenameSessionRequest(BaseModel):
     title: str
+
+
+class MasterKeyVerifyRequest(BaseModel):
+    key: str = ""
 
 
 def extract_helper_parts(raw_text: str) -> Dict[str, str]:
@@ -238,9 +292,11 @@ def parse_blueprint_tags(xml_str: str) -> Dict[str, str]:
 
 
 def create_new_session(
-    title: str = "סשן חדש", session_id: Optional[str] = None
+    owner_id: str,
+    title: str = "סשן חדש",
+    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    session_id = session_id or str(uuid.uuid4())[:8]
+    session_id = session_id or uuid.uuid4().hex[:12]
     now = datetime.now().strftime("%H:%M:%S")
     state: FactoryState = {
         "user_input": "",
@@ -295,8 +351,8 @@ def create_new_session(
             }
         ],
     }
-    SESSIONS[session_id] = session
-    save_session_record(session_id)
+    SESSIONS[(owner_id, session_id)] = session
+    save_session_record(owner_id, session_id)
     return session
 
 
@@ -396,49 +452,114 @@ async def health_check():
     }
 
 
+@app.post("/api/workspace/verify-master")
+async def verify_master_key(request: Request, req: MasterKeyVerifyRequest):
+    candidate = (req.key or request.headers.get("X-Master-Key") or "").strip()
+    authorized, configured = _verify_master_key_value(candidate)
+    return {"authorized": authorized, "configured": configured}
+
+
+@app.get("/api/workspace/export")
+async def export_workspace_history(owner_id: str = Depends(resolve_owner_id)):
+    sessions_list = storage.export_workspace_sessions(owner_id)
+    payload = {
+        "schema_version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "workspace_mode": "master" if owner_id == MASTER_OWNER_ID else "anonymous",
+        "session_count": len(sessions_list),
+        "sessions": sessions_list,
+    }
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+    slug = "master" if owner_id == MASTER_OWNER_ID else "workspace"
+    return Response(
+        content=json.dumps(payload, ensure_ascii=False, indent=2),
+        media_type="application/json; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="betterbot-history-{slug}-{stamp}.json"'
+        },
+    )
+
+
+@app.post("/api/workspace/import")
+async def import_workspace_history(
+    request: Request, owner_id: str = Depends(resolve_owner_id)
+):
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    try:
+        summary = storage.import_workspace_sessions(owner_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    for key in [k for k in SESSIONS if k[0] == owner_id]:
+        SESSIONS.pop(key, None)
+
+    return summary
+
+
 @app.get("/api/sessions")
-async def list_sessions():
-    return {"sessions": storage.list_sessions()}
+async def list_sessions(owner_id: str = Depends(resolve_owner_id)):
+    return {"sessions": storage.list_sessions(owner_id)}
 
 
 @app.post("/api/sessions")
-async def create_session_endpoint():
-    session = create_new_session()
+async def create_session_endpoint(owner_id: str = Depends(resolve_owner_id)):
+    session = create_new_session(owner_id=owner_id)
     return enrich_session(session)
 
 
 @app.get("/api/sessions/{session_id}")
-async def get_session_endpoint(session_id: str):
-    session = get_or_load_session(session_id)
+async def get_session_endpoint(
+    session_id: str, owner_id: str = Depends(resolve_owner_id)
+):
+    session = get_or_load_session(session_id, owner_id)
     if not session:
-        session = create_new_session(session_id=session_id)
+        raise HTTPException(status_code=404, detail="Session not found")
     return enrich_session(session)
 
 
 @app.patch("/api/sessions/{session_id}")
-async def rename_session_endpoint(session_id: str, req: RenameSessionRequest):
+async def rename_session_endpoint(
+    session_id: str,
+    req: RenameSessionRequest,
+    owner_id: str = Depends(resolve_owner_id),
+):
     clean_title = req.title.strip()
     if not clean_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
-    session = get_or_load_session(session_id)
+    session = get_or_load_session(session_id, owner_id)
     if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    updated = storage.rename_session(session_id, clean_title, owner_id)
+    if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
     session["title"] = clean_title
     session["title_manually_set"] = True
-    storage.rename_session(session_id, clean_title)
+    session["updated_at_iso"] = updated.get(
+        "updated_at_iso", session.get("updated_at_iso")
+    )
     return enrich_session(session)
 
 
 @app.delete("/api/sessions/{session_id}")
-async def delete_session_endpoint(session_id: str):
-    SESSIONS.pop(session_id, None)
-    deleted = storage.delete_session(session_id)
+async def delete_session_endpoint(
+    session_id: str, owner_id: str = Depends(resolve_owner_id)
+):
+    SESSIONS.pop((owner_id, session_id), None)
+    deleted = storage.delete_session(session_id, owner_id)
     return {"deleted": bool(deleted)}
 
 
 @app.get("/api/sessions/{session_id}/download")
-async def download_session_bundle(session_id: str):
-    session = get_or_load_session(session_id)
+async def download_session_bundle(
+    session_id: str, owner_id: str = Depends(resolve_owner_id)
+):
+    session = get_or_load_session(session_id, owner_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -487,14 +608,18 @@ async def download_session_bundle(session_id: str):
 
 
 @app.post("/api/sessions/{session_id}/stream")
-async def stream_factory_execution(session_id: str, req: UserMessageRequest):
+async def stream_factory_execution(
+    session_id: str,
+    req: UserMessageRequest,
+    owner_id: str = Depends(resolve_owner_id),
+):
     """
     Executes the LangGraph workflow step-by-step and streams real-time SSE updates
     so the UI can animate each node (Helper -> Construct -> Adjudicator <-> Upgrader).
     """
-    session = get_or_load_session(session_id)
+    session = get_or_load_session(session_id, owner_id)
     if not session:
-        session = create_new_session(session_id=session_id)
+        raise HTTPException(status_code=404, detail="Session not found")
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
@@ -555,7 +680,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
             last_helper = state.get("challenger_xml", "")
             state["user_input"] += f"\nAssistant: {last_helper}\nUser: {user_msg}"
 
-    save_session_record(session_id)
+    save_session_record(owner_id, session_id)
 
     async def event_generator():
         def sse(event_type: str, payload: Dict[str, Any]) -> str:
@@ -756,7 +881,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                     break
 
                 enrich_session(session)
-                save_session_record(session_id)
+                save_session_record(owner_id, session_id)
                 yield sse(
                     "node_complete",
                     {
@@ -803,7 +928,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                 session["status"] = "interviewing"
 
             enrich_session(session)
-            save_session_record(session_id)
+            save_session_record(owner_id, session_id)
             yield sse("done", session)
 
         except Exception as exc:
@@ -820,7 +945,7 @@ async def stream_factory_execution(session_id: str, req: UserMessageRequest):
                 }
             )
             enrich_session(session)
-            save_session_record(session_id)
+            save_session_record(owner_id, session_id)
             yield sse("error", {"error": err_msg, "session": session})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -844,15 +969,13 @@ BETTY_WELCOME = {
     ),
 }
 
-BETTY_HISTORIES: Dict[str, List[Dict[str, Any]]] = {
-    "tech_support": [],
-    "prompt_advisor": [],
-}
+BETTY_HISTORIES: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
 
 
-def init_betty_mode(mode: str) -> List[Dict[str, Any]]:
+def init_betty_mode(owner_id: str, mode: str) -> List[Dict[str, Any]]:
     now = datetime.now().strftime("%H:%M:%S")
-    BETTY_HISTORIES[mode] = [
+    owner_histories = BETTY_HISTORIES.setdefault(owner_id, {})
+    owner_histories[mode] = [
         {
             "id": str(uuid.uuid4())[:8],
             "role": "assistant",
@@ -862,11 +985,18 @@ def init_betty_mode(mode: str) -> List[Dict[str, Any]]:
             "timestamp": now,
         }
     ]
-    return BETTY_HISTORIES[mode]
+    return owner_histories[mode]
 
 
-init_betty_mode("tech_support")
-init_betty_mode("prompt_advisor")
+def get_betty_histories(owner_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    owner_histories = BETTY_HISTORIES.get(owner_id)
+    if owner_histories is None:
+        owner_histories = {}
+        BETTY_HISTORIES[owner_id] = owner_histories
+    for mode in ("tech_support", "prompt_advisor"):
+        if mode not in owner_histories:
+            init_betty_mode(owner_id, mode)
+    return owner_histories
 
 
 class BettyChatRequest(BaseModel):
@@ -879,11 +1009,11 @@ class BettyClearRequest(BaseModel):
     mode: str = "tech_support"
 
 
-def build_session_context_for_betty(session_id: Optional[str]) -> str:
+def build_session_context_for_betty(session_id: Optional[str], owner_id: str) -> str:
     if not session_id:
         return "<current_session_context>\nNo active session selected.\n</current_session_context>"
 
-    loaded = get_or_load_session(session_id)
+    loaded = get_or_load_session(session_id, owner_id)
     if not loaded:
         return "<current_session_context>\nNo active session selected.\n</current_session_context>"
 
@@ -969,32 +1099,39 @@ def parse_betty_response(raw_text: str) -> Dict[str, str]:
 
 
 @app.get("/api/betty/history")
-async def get_betty_history():
+async def get_betty_history(owner_id: str = Depends(resolve_owner_id)):
+    histories = get_betty_histories(owner_id)
     return {
-        "tech_support": BETTY_HISTORIES["tech_support"],
-        "prompt_advisor": BETTY_HISTORIES["prompt_advisor"],
+        "tech_support": histories["tech_support"],
+        "prompt_advisor": histories["prompt_advisor"],
     }
 
 
 @app.post("/api/betty/clear")
-async def clear_betty_history(req: BettyClearRequest):
-    mode = req.mode if req.mode in BETTY_HISTORIES else "tech_support"
-    init_betty_mode(mode)
+async def clear_betty_history(
+    req: BettyClearRequest, owner_id: str = Depends(resolve_owner_id)
+):
+    histories = get_betty_histories(owner_id)
+    mode = req.mode if req.mode in histories else "tech_support"
+    init_betty_mode(owner_id, mode)
     return {
         "mode": mode,
-        "history": BETTY_HISTORIES[mode],
+        "history": histories[mode],
     }
 
 
 @app.post("/api/betty/chat")
-async def betty_chat_endpoint(req: BettyChatRequest):
+async def betty_chat_endpoint(
+    req: BettyChatRequest, owner_id: str = Depends(resolve_owner_id)
+):
     mode = req.mode if req.mode in ["tech_support", "prompt_advisor"] else "tech_support"
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
 
     now = datetime.now().strftime("%H:%M:%S")
-    history = BETTY_HISTORIES[mode]
+    histories = get_betty_histories(owner_id)
+    history = histories[mode]
 
     history.append(
         {
@@ -1011,7 +1148,7 @@ async def betty_chat_endpoint(req: BettyChatRequest):
         if mode == "tech_support"
         else BETTY_PROMPT_ADVISOR_PROMPT
     )
-    session_ctx = build_session_context_for_betty(req.session_id)
+    session_ctx = build_session_context_for_betty(req.session_id, owner_id)
 
     lc_messages = [
         SystemMessage(content=f"{sys_prompt}\n\n{session_ctx}"),
@@ -1048,8 +1185,8 @@ async def betty_chat_endpoint(req: BettyChatRequest):
             "timestamp": datetime.now().strftime("%H:%M:%S"),
         }
         history.append(reply_item)
-        if req.session_id and req.session_id in SESSIONS:
-            save_session_record(req.session_id)
+        if req.session_id and (owner_id, req.session_id) in SESSIONS:
+            save_session_record(owner_id, req.session_id)
         return {
             "mode": mode,
             "reply": reply_item,

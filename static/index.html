@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Rubik:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=3.3" />
+  <link rel="stylesheet" href="/static/styles.css?v=3.4" />
 </head>
 <body>
   <!-- ==========================================
@@ -67,7 +67,7 @@
           <div id="historyLibraryPopover" class="history-popover hidden" role="dialog" aria-label="ספריית היסטוריית יצירות">
             <div class="history-popover-header">
               <strong>ספריית היסטוריית יצירות</strong>
-              <span class="stat-muted">נשמר אוטומטית ב-DB</span>
+              <span class="stat-muted" id="historyWorkspaceHint">מבודד למרחב העבודה</span>
             </div>
             <div class="history-search-row">
               <input type="search" id="historySearchInput" class="history-search-input" placeholder="חפש יצירה לפי שם או סוג..." />
@@ -79,6 +79,24 @@
               <button type="button" class="history-filter-chip" data-filter="HYBRID_BUNDLE">HYBRID</button>
             </div>
             <div class="history-list" id="historyLibraryList"></div>
+            <div class="history-popover-footer">
+              <button type="button" id="historyExportJsonBtn" class="btn btn-ghost btn-sm" title="ייצא את היסטוריית מרחב העבודה לקובץ JSON">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>ייצוא JSON</span>
+              </button>
+              <button type="button" id="historyImportJsonBtn" class="btn btn-ghost btn-sm" title="ייבא היסטוריה מקובץ JSON">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span>ייבוא JSON</span>
+              </button>
+            </div>
           </div>
         </div>
         <button id="newSessionBtn" class="btn btn-primary" title="פתח סשן חדש">
@@ -89,6 +107,15 @@
           <span>סוכן חדש</span>
         </button>
       </div>
+
+      <button type="button" id="workspaceSyncBtn" class="btn btn-secondary workspace-sync-btn" title="סנכרון מרחב עבודה, מפתח Master וגיבוי JSON" aria-label="סנכרון מרחב עבודה">
+        <span class="workspace-status-dot" id="workspaceStatusDot" aria-hidden="true"></span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+        </svg>
+        <span id="workspaceSyncBtnLabel" class="workspace-sync-label">סנכרון מרחב עבודה</span>
+        <span class="workspace-master-pill hidden" id="workspaceMasterPill">MASTER</span>
+      </button>
 
       <button type="button" id="bettyFab" class="btn btn-secondary betty-header-toggle" title="פתח / סגור את בטי — יועצת AI ותמיכה טכנית">
         <span class="betty-online-dot"></span>
@@ -833,9 +860,86 @@
     </aside>
   </div>
 
+  <!-- Workspace Sync & JSON Portability Modal -->
+  <div id="workspaceSyncModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="workspaceSyncModalTitle">
+    <div class="workspace-modal">
+      <div class="workspace-modal-header">
+        <div class="workspace-modal-title-group">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="m21 2-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+          </svg>
+          <h3 id="workspaceSyncModalTitle">סנכרון מרחב עבודה</h3>
+        </div>
+        <button type="button" id="workspaceSyncCloseBtn" class="betty-icon-btn" title="סגור חלון">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="workspace-modal-body">
+        <div class="workspace-status-card">
+          <div class="workspace-status-row">
+            <span class="workspace-status-label">מצב נוכחי:</span>
+            <span id="workspaceModeBadge" class="badge badge-neutral">מרחב אנונימי מבודד</span>
+          </div>
+          <div id="workspaceUuidRow" class="workspace-uuid-row">
+            <span class="workspace-status-label">מזהה מרחב מקומי:</span>
+            <code id="workspaceUuidText" class="tech-token" dir="ltr"></code>
+            <button type="button" id="copyWorkspaceUuidBtn" class="btn btn-ghost btn-sm" title="העתק מזהה מרחב">העתק</button>
+          </div>
+        </div>
+
+        <div class="workspace-section">
+          <h4>גישה למרחב הבעלים (<code class="tech-token" dir="ltr">Master Mode</code>)</h4>
+          <p class="workspace-section-desc">הזן את מפתח ה-<code class="tech-token" dir="ltr">MASTER_WORKSPACE_KEY</code> כדי לגשת להיסטוריה המרכזית שלך מכל דפדפן או מכשיר.</p>
+
+          <div id="masterUnconfiguredHint" class="workspace-hint-box hidden">
+            <strong>מצב Master אינו מוגדר בשרת:</strong> המשתנה <code class="tech-token" dir="ltr">MASTER_WORKSPACE_KEY</code> טרם הוגדר בקובץ <code class="tech-token" dir="ltr">.env</code> או במשתני הסביבה ב-Render. עדיין ניתן להשתמש במרחב אנונימי ובגיבוי JSON.
+          </div>
+
+          <form id="masterKeyForm" class="workspace-key-form">
+            <input type="password" id="masterKeyInput" class="workspace-key-input" placeholder="הזן MASTER_WORKSPACE_KEY..." autocomplete="off" dir="ltr" />
+            <button type="submit" id="masterKeySubmitBtn" class="btn btn-primary btn-sm">התחבר כ-Master</button>
+          </form>
+          <div id="masterKeyFeedback" class="workspace-feedback hidden"></div>
+
+          <div id="masterActiveActions" class="workspace-active-actions hidden">
+            <button type="button" id="masterDisconnectBtn" class="btn btn-secondary btn-sm">התנתק וחזור למרחב אנונימי</button>
+          </div>
+        </div>
+
+        <div class="workspace-section">
+          <h4>גיבוי וניוד היסטוריה (<code class="tech-token" dir="ltr">JSON</code>)</h4>
+          <p class="workspace-section-desc">ייצא את כל הסשנים והתוצרים של המרחב הפעיל לקובץ גיבוי, או ייבא קובץ גיבוי לתוך המרחב הנוכחי.</p>
+          <div class="workspace-backup-actions">
+            <button type="button" id="exportWorkspaceBtn" class="btn btn-secondary btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>ייצוא היסטוריה (JSON)</span>
+            </button>
+            <button type="button" id="importWorkspaceBtn" class="btn btn-secondary btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              <span>ייבוא היסטוריה (JSON)</span>
+            </button>
+          </div>
+          <input type="file" id="importWorkspaceFileInput" accept=".json,application/json" class="hidden" />
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast Notification -->
   <div id="toast" class="toast hidden"></div>
 
-  <script src="/static/app.js?v=3.3"></script>
+  <script src="/static/app.js?v=3.4"></script>
 </body>
 </html>
