@@ -2,6 +2,7 @@ import json
 import operator
 import os
 import re
+import threading
 import time
 from typing import Annotated, Any, Dict, List, Optional, Tuple, TypedDict
 
@@ -20,7 +21,10 @@ from prompts import (
     HELPER_PROMPT,
     HELPER_READINESS_QUESTIONS,
     UPGRADER_PROMPT,
+    get_rubric_questions,
 )
+
+VALID_TARGET_TYPES = ("SKILL_PACKAGE", "SYSTEM_PROMPT", "HYBRID_BUNDLE", "SKILL_SUITE")
 
 load_dotenv()
 # Enforces Overwrite logic to prevent Context Window Bloat
@@ -28,6 +32,15 @@ load_dotenv()
 
 def replace_value(old_val, new_val):
     return new_val
+
+
+def merge_dicts(
+    old_val: Optional[Dict[str, Any]], new_val: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    merged = dict(old_val or {})
+    if new_val:
+        merged.update(new_val)
+    return merged
 
 
 class FactoryState(TypedDict, total=False):
@@ -50,10 +63,13 @@ class FactoryState(TypedDict, total=False):
     # BetterBot 2.0 Hybrid Agent & Skill Compiler State
     target_type: Annotated[str, replace_value]
     slug_name: Annotated[str, replace_value]
+    final_prompt: Annotated[str, replace_value]
     reference_files: Annotated[Dict[str, str], replace_value]
     rubric_scores: Annotated[Dict[str, float], replace_value]
     readiness_scores: Annotated[Dict[str, Any], replace_value]
     is_manual_override: Annotated[bool, replace_value]
+    model_telemetry: Annotated[Dict[str, Any], merge_dicts]
+    model_overrides: Annotated[Dict[str, str], replace_value]
 
 
 # ==========================================
@@ -61,31 +77,79 @@ class FactoryState(TypedDict, total=False):
 # ==========================================
 
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "MISSING_GOOGLE_API_KEY")
-FAST_MODEL = os.environ.get("FAST_MODEL", "gemini-4-hydrogen")
-COMPILER_MODEL = os.environ.get("COMPILER_MODEL", "gemini-4-argon")
-DECISION_MODEL = os.environ.get("DECISION_MODEL", "gemini-decision-1")
+FAST_MODEL = os.environ.get("FAST_MODEL", "gemini-4-hydrogen").strip() or "gemini-4-hydrogen"
+COMPILER_MODEL = os.environ.get("COMPILER_MODEL", "gemini-4-neon").strip() or "gemini-4-neon"
+FALLBACK_MODEL = (os.environ.get("FALLBACK_MODEL") or FAST_MODEL).strip() or FAST_MODEL
+DECISION_MODEL = os.environ.get("DECISION_MODEL", "gemini-decision-1").strip() or "gemini-decision-1"
+
+HELPER_MODEL = (os.environ.get("HELPER_MODEL") or FAST_MODEL).strip() or FAST_MODEL
+CONSTRUCT_MODEL = (os.environ.get("CONSTRUCT_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
+UPGRADER_MODEL = (os.environ.get("UPGRADER_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
+ADJUDICATOR_MODEL = (os.environ.get("ADJUDICATOR_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
+BETTY_MODEL = (os.environ.get("BETTY_MODEL") or FAST_MODEL).strip() or FAST_MODEL
 MAX_QA_ITERATIONS = 2
 
-llm = ChatGoogleGenerativeAI(
-    model=FAST_MODEL,
-    temperature=0,
-    thinking_level="low",
-    google_api_key=GOOGLE_API_KEY,
-)
+NODE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
+    "node_1_helper": {"model": HELPER_MODEL, "thinking_level": "low"},
+    "node_2_construct": {"model": CONSTRUCT_MODEL, "thinking_level": "medium"},
+    "node_3_upgrader": {"model": UPGRADER_MODEL, "thinking_level": "medium"},
+    "node_4_adjudicator": {"model": ADJUDICATOR_MODEL, "thinking_level": "low"},
+    "betty": {"model": BETTY_MODEL, "thinking_level": "low"},
+}
 
-construct_llm = ChatGoogleGenerativeAI(
-    model=FAST_MODEL,
-    temperature=0,
-    thinking_level="medium",
-    google_api_key=GOOGLE_API_KEY,
-)
+ROLE_ALIASES: Dict[str, str] = {
+    "helper": "node_1_helper",
+    "node_1_helper": "node_1_helper",
+    "construct": "node_2_construct",
+    "node_2_construct": "node_2_construct",
+    "upgrader": "node_3_upgrader",
+    "node_3_upgrader": "node_3_upgrader",
+    "adjudicator": "node_4_adjudicator",
+    "node_4_adjudicator": "node_4_adjudicator",
+    "betty": "betty",
+}
 
-compiler_llm = ChatGoogleGenerativeAI(
-    model=COMPILER_MODEL,
-    temperature=0,
-    thinking_level="medium",
-    google_api_key=GOOGLE_API_KEY,
-)
+_MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$")
+_MODEL_CLIENT_CACHE: Dict[Tuple[str, str], ChatGoogleGenerativeAI] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
+def _get_chat_model(model_name: str, thinking_level: str) -> ChatGoogleGenerativeAI:
+    key = (model_name, thinking_level)
+    with _MODEL_CACHE_LOCK:
+        cached = _MODEL_CLIENT_CACHE.get(key)
+        if cached is None:
+            cached = ChatGoogleGenerativeAI(
+                model=model_name,
+                temperature=0,
+                thinking_level=thinking_level,
+                google_api_key=GOOGLE_API_KEY,
+            )
+            _MODEL_CLIENT_CACHE[key] = cached
+        return cached
+
+
+def sanitize_model_overrides(raw_overrides: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    if not isinstance(raw_overrides, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for raw_role, raw_model in raw_overrides.items():
+        if not isinstance(raw_role, str) or not isinstance(raw_model, str):
+            continue
+        canonical_role = ROLE_ALIASES.get(raw_role.strip().lower())
+        model_candidate = raw_model.strip()
+        if canonical_role and _MODEL_NAME_RE.match(model_candidate):
+            cleaned[canonical_role] = model_candidate
+    return cleaned
+
+
+llm = _get_chat_model(FAST_MODEL, "low")
+helper_llm = _get_chat_model(HELPER_MODEL, "low")
+construct_llm = _get_chat_model(CONSTRUCT_MODEL, "medium")
+compiler_llm = _get_chat_model(COMPILER_MODEL, "medium")
+upgrader_llm = _get_chat_model(UPGRADER_MODEL, "medium")
+adjudicator_llm = _get_chat_model(ADJUDICATOR_MODEL, "low")
+betty_llm = _get_chat_model(BETTY_MODEL, "low")
 
 
 def _normalize_content(raw_content: Any) -> str:
@@ -98,52 +162,261 @@ def _normalize_content(raw_content: Any) -> str:
     return str(raw_content)
 
 
+def has_blueprint_refs(xml_text: str) -> bool:
+    """Returns True when <PROGRESSIVE_DISCLOSURE_REFS> nominates non-None auxiliary files."""
+    refs_match = re.search(
+        r"<PROGRESSIVE_DISCLOSURE_REFS>\s*(.*?)\s*</PROGRESSIVE_DISCLOSURE_REFS>",
+        xml_text or "",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    raw_refs = refs_match.group(1).strip() if refs_match else ""
+    return bool(
+        raw_refs and raw_refs.lower() not in ("none", "n/a", "na", "null", "-", "[]")
+    )
+
+
+def is_needs_auxiliary_files(
+    readiness_scores: Optional[Dict[str, Any]], fallback_xml: str = ""
+) -> bool:
+    """Resolves whether Gate 1 or the blueprint flagged auxiliary `references/*` extraction."""
+    if (
+        isinstance(readiness_scores, dict)
+        and "needs_auxiliary_files" in readiness_scores
+        and readiness_scores["needs_auxiliary_files"] is not None
+    ):
+        val = readiness_scores["needs_auxiliary_files"]
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.strip().lower() in ("yes", "true", "1")
+        try:
+            return float(val) >= 0.65
+        except (TypeError, ValueError):
+            return False
+    return has_blueprint_refs(fallback_xml)
+
+
+def get_auxiliary_reference_paths(ref_files: Optional[Dict[str, str]]) -> List[str]:
+    """Returns normalized, non-empty auxiliary file paths located under `references/*`."""
+    paths: List[str] = []
+    for path, content in (ref_files or {}).items():
+        norm = normalize_artifact_path(path)
+        if (
+            norm.startswith("references/")
+            and len(norm) > len("references/")
+            and bool((content or "").strip())
+        ):
+            paths.append(norm)
+    return paths
+
+
+def has_auxiliary_reference_files(ref_files: Optional[Dict[str, str]]) -> bool:
+    """Returns True only when at least one non-empty file exists under `references/*`."""
+    return bool(get_auxiliary_reference_paths(ref_files))
+
+
+def resolve_construct_thinking_level(
+    xml_text: str, target_type: str = "SYSTEM_PROMPT"
+) -> str:
+    """
+    Calibrates Construct thinking budget:
+    - `medium` for multi-file packages (`HYBRID_BUNDLE`, `SKILL_PACKAGE`, `SKILL_SUITE`, or explicit auxiliary `references/`).
+    - `low` for light single-file `SYSTEM_PROMPT` targets without auxiliary refs.
+    """
+    has_refs = has_blueprint_refs(xml_text)
+    normalized_target = (target_type or "SYSTEM_PROMPT").strip().upper()
+    if normalized_target in ("HYBRID_BUNDLE", "SKILL_PACKAGE", "SKILL_SUITE") or has_refs:
+        return "medium"
+    return "low"
+
+
+def build_fallback_chain(
+    role: str,
+    thinking_level: Optional[str] = None,
+    model_overrides: Optional[Dict[str, str]] = None,
+) -> List[Tuple[str, str]]:
+    canonical_role = ROLE_ALIASES.get(role, role)
+    role_cfg = NODE_MODEL_DEFAULTS.get(
+        canonical_role, {"model": FAST_MODEL, "thinking_level": "low"}
+    )
+    sanitized = sanitize_model_overrides(model_overrides)
+    primary_model = sanitized.get(canonical_role, role_cfg["model"])
+    primary_level = thinking_level or role_cfg["thinking_level"]
+
+    candidates: List[Tuple[str, str]] = [(primary_model, primary_level)]
+    if FALLBACK_MODEL != primary_model:
+        candidates.append((FALLBACK_MODEL, primary_level))
+        if primary_level != "low":
+            candidates.append((FALLBACK_MODEL, "low"))
+    if FAST_MODEL not in (primary_model, FALLBACK_MODEL):
+        candidates.append((FAST_MODEL, "low"))
+    if primary_level != "low" and FALLBACK_MODEL == primary_model:
+        candidates.append((primary_model, "low"))
+
+    deduped: List[Tuple[str, str]] = []
+    for pair in candidates:
+        if pair not in deduped:
+            deduped.append(pair)
+    return deduped
+
+
+def get_node_routing_plan(
+    role: str, state: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    canonical_role = ROLE_ALIASES.get(role, role)
+    level_override: Optional[str] = None
+    if canonical_role == "node_2_construct" and state:
+        xml_text = state.get("challenger_xml") or state.get("champion_xml") or ""
+        target_type = state.get("target_type") or "SYSTEM_PROMPT"
+        if xml_text:
+            meta = extract_blueprint_meta(xml_text)
+            target_type = meta.get("target_type") or target_type
+        level_override = resolve_construct_thinking_level(xml_text, target_type)
+
+    overrides = state.get("model_overrides") if state else None
+    chain = build_fallback_chain(
+        role=canonical_role,
+        thinking_level=level_override,
+        model_overrides=overrides,
+    )
+    return {
+        "role": canonical_role,
+        "model": chain[0][0],
+        "thinking_level": chain[0][1],
+        "fallback_chain": [
+            {"model": m, "thinking_level": lvl} for m, lvl in chain
+        ],
+    }
+
+
+def get_model_routing_summary() -> Dict[str, Any]:
+    summary: Dict[str, Any] = {}
+    for role in (
+        "node_1_helper",
+        "node_2_construct",
+        "node_3_upgrader",
+        "node_4_adjudicator",
+        "betty",
+    ):
+        chain = build_fallback_chain(role)
+        entry: Dict[str, Any] = {
+            "model": chain[0][0],
+            "thinking_level": chain[0][1],
+            "fallback_model": FALLBACK_MODEL,
+        }
+        if role == "node_2_construct":
+            entry["construct_light_thinking_level"] = "low"
+        if role in ("node_1_helper", "node_4_adjudicator"):
+            entry["decision_model"] = DECISION_MODEL
+        summary[role] = entry
+    return summary
+
+
+def _invoke_role_with_fallback(
+    role: str,
+    prompt_template: Any = None,
+    inputs: Optional[Dict[str, Any]] = None,
+    messages: Optional[List[Any]] = None,
+    structured_schema: Any = None,
+    thinking_level: Optional[str] = None,
+    model_overrides: Optional[Dict[str, str]] = None,
+    target_type: Optional[str] = None,
+) -> Tuple[Any, Dict[str, Any]]:
+    """
+    Executes a role/node prompt or message list using calibrated per-node routing
+    and deterministic fallback (`gemini-4-neon` -> `FALLBACK_MODEL` / `FAST_MODEL`).
+    """
+    chain = build_fallback_chain(
+        role=role,
+        thinking_level=thinking_level,
+        model_overrides=model_overrides,
+    )
+    primary_model = chain[0][0]
+    last_exc: Optional[Exception] = None
+
+    for idx, (model_name, level) in enumerate(chain):
+        t0 = time.perf_counter()
+        try:
+            client = _get_chat_model(model_name, level)
+            target = (
+                client.with_structured_output(structured_schema)
+                if structured_schema is not None
+                else client
+            )
+            if prompt_template is not None:
+                result = (prompt_template | target).invoke(inputs or {})
+            else:
+                result = target.invoke(messages)
+
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            fallback_used = idx > 0
+            target_suffix = f" target_type={target_type}" if target_type else ""
+            print(
+                f"    -> [ModelRouter] role={role} model={model_name} "
+                f"thinking_level={level} fallback_used={fallback_used}"
+                f"{target_suffix} latency_ms={latency_ms:.1f}"
+            )
+            telemetry: Dict[str, Any] = {
+                "role": role,
+                "configured_model": primary_model,
+                "model": model_name,
+                "thinking_level": level,
+                "fallback_used": fallback_used,
+                "fallback_from": primary_model if fallback_used else None,
+                "latency_ms": round(latency_ms, 1),
+            }
+            return result, telemetry
+        except Exception as exc:
+            last_exc = exc
+            if idx < len(chain) - 1:
+                next_model, next_level = chain[idx + 1]
+                print(
+                    f"    -> [WARN] Model '{model_name}' for role={role} "
+                    f"(thinking_level={level}) failed ({exc}); "
+                    f"falling back to '{next_model}' (thinking_level={next_level})."
+                )
+    raise last_exc
+
+
 def _invoke_with_compiler_fallback(
     prompt_template: Any,
     inputs: Dict[str, Any],
     structured_schema: Any = None,
     target_type: str = "SYSTEM_PROMPT",
 ) -> Any:
-    """
-    Routes Construct/Upgrader execution using calibrated thinking budgets:
-    - HYBRID_BUNDLE uses COMPILER_MODEL (`thinking_level="medium"`) with fallback to FAST_MODEL.
-    - SYSTEM_PROMPT / SKILL_PACKAGE default directly to FAST_MODEL (`thinking_level="medium"`).
-    """
+    """Backward-compatible wrapper routing Construct/Upgrader calls through `_invoke_role_with_fallback`."""
     normalized_target = (target_type or "SYSTEM_PROMPT").strip().upper()
-    if normalized_target == "HYBRID_BUNDLE" and COMPILER_MODEL != FAST_MODEL:
-        models = [compiler_llm, construct_llm, llm]
-    else:
-        models = [construct_llm, llm]
+    role = "node_3_upgrader" if structured_schema is not None else "node_2_construct"
+    thinking_level = (
+        "medium"
+        if (
+            role == "node_3_upgrader"
+            or normalized_target in ("HYBRID_BUNDLE", "SKILL_PACKAGE", "SKILL_SUITE")
+        )
+        else "low"
+    )
+    result, _ = _invoke_role_with_fallback(
+        role=role,
+        prompt_template=prompt_template,
+        inputs=inputs,
+        structured_schema=structured_schema,
+        thinking_level=thinking_level,
+        target_type=normalized_target,
+    )
+    return result
 
-    last_exc = None
-    for idx, model_instance in enumerate(models):
-        t0 = time.perf_counter()
-        try:
-            target = (
-                model_instance.with_structured_output(structured_schema)
-                if structured_schema is not None
-                else model_instance
-            )
-            chain = prompt_template | target
-            result = chain.invoke(inputs)
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            print(
-                f"    -> [CompilerLLM] model={model_instance.model} "
-                f"thinking_level={model_instance.thinking_level} "
-                f"target_type={normalized_target} latency_ms={latency_ms:.1f}"
-            )
-            return result
-        except Exception as exc:
-            last_exc = exc
-            if idx < len(models) - 1:
-                next_model = models[idx + 1]
-                print(
-                    f"    -> [WARN] Compiler model '{model_instance.model}' "
-                    f"(thinking_level={model_instance.thinking_level}) failed ({exc}); "
-                    f"falling back to '{next_model.model}' "
-                    f"(thinking_level={next_model.thinking_level})."
-                )
-    raise last_exc
+
+def invoke_betty(
+    messages: List[Any], model_override: Optional[str] = None
+) -> Tuple[Any, Dict[str, Any]]:
+    """Invokes Betty on low-latency FAST_MODEL (`thinking_level="low"`) with resilient fallback."""
+    overrides = {"betty": model_override} if model_override else None
+    return _invoke_role_with_fallback(
+        role="betty",
+        messages=messages,
+        thinking_level="low",
+        model_overrides=overrides,
+    )
 
 
 def evaluate_with_decision_model(
@@ -164,9 +437,10 @@ def evaluate_with_decision_model(
         }
 
     choice_descriptions = {
-        "SKILL_PACKAGE": "Modular agent skill package (SKILL.md + optional references/*) with triggers and SOP",
+        "SKILL_PACKAGE": "Single modular agent skill package (SKILL.md + optional references/*) for tightly coupled workflows",
         "SYSTEM_PROMPT": "Standalone autonomous persona or assistant constitutional system prompt",
         "HYBRID_BUNDLE": "Combined bundle requiring both a core System Prompt and a modular Skill package",
+        "SKILL_SUITE": "Multi-skill suite (2-4 orthogonal, loosely coupled skills under skills/<sub_slug>/SKILL.md) with separate triggers for independent Pick & Mix installation",
     }
 
     questions_map: Dict[str, Dict[str, Any]] = {}
@@ -323,21 +597,39 @@ def extract_blueprint_meta(xml_text: str) -> Dict[str, str]:
         flags=re.DOTALL | re.IGNORECASE,
     )
     raw_target = target_match.group(1).strip().upper() if target_match else "SYSTEM_PROMPT"
-    if raw_target not in ("SKILL_PACKAGE", "SYSTEM_PROMPT", "HYBRID_BUNDLE"):
+    if raw_target not in VALID_TARGET_TYPES:
         raw_target = "SYSTEM_PROMPT"
     slug_name = slug_match.group(1).strip() if slug_match else ""
     return {"target_type": raw_target, "slug_name": slug_name}
 
 
-def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
-    """
-    Splits `### FILE: <path>` sections from Construct/Upgrader outputs.
-    Auxiliary files (such as `references/...`) are extracted into `reference_files`,
-    while the primary artifact (preserving any `<compilation_check>`) remains in `challenger_prompt`.
-    """
-    if not raw_text:
-        return "", {}
+def normalize_artifact_path(raw_path: str) -> str:
+    """Normalizes relative artifact paths and rejects traversal, drive prefixes, or UNC/empty paths."""
+    if not isinstance(raw_path, str):
+        return ""
+    cleaned = raw_path.strip().strip("`\"'").strip()
+    if not cleaned or "\x00" in cleaned:
+        return ""
+    if (
+        re.match(r"^[a-zA-Z]:", cleaned)
+        or cleaned.startswith("\\\\")
+        or cleaned.startswith("//")
+    ):
+        return ""
+    cleaned = cleaned.replace("\\", "/").strip("/")
+    if not cleaned:
+        return ""
+    segments = cleaned.split("/")
+    for seg in segments:
+        if not seg or seg in (".", "..") or ":" in seg:
+            return ""
+    return "/".join(segments)
 
+
+def _extract_compilation_body(raw_text: str) -> Tuple[str, str]:
+    """Extracts any `<compilation_check>` block and unwraps an outer markdown fence."""
+    if not raw_text:
+        return "", ""
     comp_match = re.search(
         r"(<compilation_check>.*?</compilation_check>)",
         raw_text,
@@ -357,9 +649,50 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
         flags=re.DOTALL,
     )
     inner_body = code_match.group(1).strip() if code_match else body
+    return comp_block, inner_body
+
+
+def parse_deleted_artifacts(raw_text: str) -> List[str]:
+    """Extracts and sanitizes `### DELETE: <path>` directives from Upgrader outputs."""
+    if not raw_text:
+        return []
+    _, inner_body = _extract_compilation_body(raw_text)
+    deleted: List[str] = []
+    seen = set()
+    for match in re.finditer(r"(?m)^###\s+DELETE:\s*(.+?)\s*$", inner_body):
+        norm = normalize_artifact_path(match.group(1))
+        if norm and norm not in seen:
+            seen.add(norm)
+            deleted.append(norm)
+    return deleted
+
+
+def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
+    """
+    Splits `### FILE: <path>` sections from Construct/Upgrader outputs, supporting
+    flat (`references/...`) and nested (`skills/<slug>/...`) relative paths.
+    Auxiliary files are extracted into `reference_files` while the primary artifact
+    (preserving any `<compilation_check>`) remains in `challenger_prompt`.
+    """
+    if not raw_text:
+        return "", {}
+
+    comp_block, inner_body = _extract_compilation_body(raw_text)
+    has_delete_directives = bool(parse_deleted_artifacts(raw_text))
+    if has_delete_directives:
+        inner_body = re.sub(
+            r"(?m)^###\s+DELETE:\s*.+?\s*$\n?", "", inner_body
+        ).strip()
 
     parts = re.split(r"(?m)^###\s+FILE:\s*(.+?)\s*$", inner_body)
     if len(parts) <= 1:
+        if has_delete_directives:
+            if not inner_body:
+                return comp_block, {}
+            primary_only = (
+                f"{comp_block}\n\n{inner_body}".strip() if comp_block else inner_body
+            )
+            return primary_only, {}
         return raw_text, {}
 
     preamble = parts[0].strip()
@@ -367,15 +700,12 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
     reference_files: Dict[str, str] = {}
 
     for i in range(1, len(parts), 2):
-        file_path = parts[i].strip().strip("`")
+        file_path = normalize_artifact_path(parts[i])
         file_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
         if not file_path:
             continue
         all_files[file_path] = file_content
-        if file_path.startswith("references/") or preamble:
-            reference_files[file_path] = file_content
-        elif file_path not in ("SYSTEM_PROMPT.md", "SKILL.md"):
-            reference_files[file_path] = file_content
+        reference_files[file_path] = file_content
 
     if preamble:
         primary_body = preamble
@@ -385,11 +715,14 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
             for fp, fc in all_files.items()
             if fp in ("SYSTEM_PROMPT.md", "SKILL.md")
         ]
-        primary_body = "\n\n".join(primary_sections) if primary_sections else inner_body
-        for fp, fc in all_files.items():
-            reference_files[fp] = fc
+        primary_body = "\n\n".join(primary_sections)
 
-    primary_output = f"{comp_block}\n\n{primary_body}".strip() if comp_block else primary_body
+    if primary_body:
+        primary_output = (
+            f"{comp_block}\n\n{primary_body}".strip() if comp_block else primary_body
+        )
+    else:
+        primary_output = comp_block
     return primary_output, reference_files
 
 
@@ -399,18 +732,28 @@ def format_artifact_with_references(
 ) -> str:
     """
     Reconstructs the unified multi-file artifact view (primary prompt + auxiliary `### FILE:` blocks)
-    so Node 3 (Upgrader) and Node 4 (Adjudicator) audit and edit the full Skill/Bundle package.
+    so Node 3 (Upgrader) and Node 4 (Adjudicator) audit and edit the full Skill/Bundle/Suite package.
     """
     if not reference_files:
         return primary_prompt or ""
+    base = (primary_prompt or "").strip()
+    body_without_checks = re.sub(
+        r"<compilation_check>.*?</compilation_check>",
+        "",
+        base,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     extra_sections = []
     for rel_path, content in reference_files.items():
-        if not rel_path or f"### FILE: {rel_path}" in (primary_prompt or ""):
+        norm_path = normalize_artifact_path(rel_path)
+        if not norm_path:
             continue
-        extra_sections.append(f"### FILE: {rel_path}\n{content}")
+        header_re = rf"(?m)^###\s+FILE:\s*{re.escape(norm_path)}\s*$"
+        if re.search(header_re, body_without_checks):
+            continue
+        extra_sections.append(f"### FILE: {norm_path}\n{content}")
     if not extra_sections:
-        return primary_prompt or ""
-    base = (primary_prompt or "").strip()
+        return base
     return f"{base}\n\n" + "\n\n".join(extra_sections) if base else "\n\n".join(extra_sections)
 
 # ==========================================
@@ -428,7 +771,17 @@ def node_helper(state: FactoryState):
     turn_count = 1 + user_input.count("\nUser:")
 
     readiness = evaluate_with_decision_model(user_input, HELPER_READINESS_QUESTIONS)
-    target_type = readiness.get("target_type") or state.get("target_type") or "SYSTEM_PROMPT"
+    raw_target = (
+        readiness.get("target_type") or state.get("target_type") or "SYSTEM_PROMPT"
+    ).strip().upper()
+    target_type = raw_target if raw_target in VALID_TARGET_TYPES else "SYSTEM_PROMPT"
+
+    suite_hint = (
+        " Because TARGET_TYPE is SKILL_SUITE, populate <SUITE_TOPOLOGY> with 2-4 orthogonal atomic skills "
+        "(SLUG, SINGLE_RESPONSIBILITY, POSITIVE_TRIGGERS, NEGATIVE_TRIGGERS_VS_SIBLINGS)."
+        if target_type == "SKILL_SUITE"
+        else " Enforce the Orthogonality Rule: keep tightly coupled workflows in a single SKILL_PACKAGE/HYBRID_BUNDLE and set <SUITE_TOPOLOGY> to None."
+    )
 
     if readiness.get("used_decision_model"):
         ready_prob = float(readiness.get("ready_to_compile", 0.0))
@@ -447,7 +800,8 @@ def node_helper(state: FactoryState):
             missing_fields_hint = (
                 f"Turn count: {turn_count}. Readiness score: {ready_prob:.2f}. "
                 f"Recommended TARGET_TYPE: {target_type}. "
-                f"Needs auxiliary references/: {needs_refs}. "
+                f"Needs auxiliary references/: {needs_refs}."
+                f"{suite_hint} "
                 "Compile the full <ARTIFACT_BLUEPRINT> XML immediately in this turn."
             )
         else:
@@ -455,7 +809,8 @@ def node_helper(state: FactoryState):
             missing_fields_hint = (
                 f"Turn count: {turn_count}/3. Recommended TARGET_TYPE: {target_type}. "
                 f"Dimensions with confidence < 0.80: {missing_str}. "
-                f"Needs auxiliary references/: {needs_refs}. "
+                f"Needs auxiliary references/: {needs_refs}."
+                f"{suite_hint} "
                 "Ask 1-2 targeted Hebrew clarification questions for missing dimensions before compiling."
             )
     else:
@@ -476,9 +831,12 @@ def node_helper(state: FactoryState):
             ("human", "{user_input}"),
         ]
     )
-    chain = prompt | llm
-    response = chain.invoke(
-        {"user_input": user_input, "missing_fields_hint": missing_fields_hint}
+    response, telemetry = _invoke_role_with_fallback(
+        role="node_1_helper",
+        prompt_template=prompt,
+        inputs={"user_input": user_input, "missing_fields_hint": missing_fields_hint},
+        thinking_level="low",
+        model_overrides=state.get("model_overrides"),
     )
     content = _normalize_content(response.content)
 
@@ -493,6 +851,10 @@ def node_helper(state: FactoryState):
         "challenger_xml": content,
         "readiness_scores": readiness,
         "target_type": target_type,
+        "model_telemetry": {
+            "node_1_helper": telemetry,
+            "last_execution": telemetry,
+        },
     }
     if has_blueprint_xml(content):
         meta = extract_blueprint_meta(content)
@@ -511,11 +873,23 @@ def node_construct(state: FactoryState):
     print(">>> Executing Node 2: The Construct")
     challenger_xml = state.get("challenger_xml", "")
     meta = extract_blueprint_meta(challenger_xml)
+    thinking_level = resolve_construct_thinking_level(
+        challenger_xml, meta["target_type"]
+    )
+    needs_aux = is_needs_auxiliary_files(
+        state.get("readiness_scores"), challenger_xml
+    ) or has_blueprint_refs(challenger_xml)
 
     prompt = PromptTemplate.from_template(CONSTRUCT_PROMPT)
-    response = _invoke_with_compiler_fallback(
-        prompt,
-        {"challenger_xml": challenger_xml},
+    response, telemetry = _invoke_role_with_fallback(
+        role="node_2_construct",
+        prompt_template=prompt,
+        inputs={
+            "challenger_xml": challenger_xml,
+            "needs_auxiliary_files": "True" if needs_aux else "False",
+        },
+        thinking_level=thinking_level,
+        model_overrides=state.get("model_overrides"),
         target_type=meta["target_type"],
     )
     raw_content = _normalize_content(response.content)
@@ -526,6 +900,10 @@ def node_construct(state: FactoryState):
         "challenger_prompt": primary_prompt,
         "reference_files": ref_files,
         "target_type": meta["target_type"],
+        "model_telemetry": {
+            "node_2_construct": telemetry,
+            "last_execution": telemetry,
+        },
     }
     if meta["slug_name"]:
         update["slug_name"] = meta["slug_name"]
@@ -547,14 +925,18 @@ class UpgraderOutput(BaseModel):
         description="The fully revised XML blueprint, incorporating all corrections."
     )
     updated_prompt: str = Field(
-        description="The fully revised Artifact / System Prompt, incorporating all corrections."
+        description=(
+            "The revised primary artifact plus ONLY modified or newly created auxiliary "
+            "`### FILE: <path>` blocks (and optional `### DELETE: <path>` lines)."
+        )
     )
 
 
 def node_upgrader(state: FactoryState):
     """
-    Node 3 (The Upgrader 2.0): Atomic editor receiving QA directives or manual overrides.
-    Reads Champions and Error Log, overwrites Challengers and updates metadata/references.
+    Node 3 (The Upgrader 2.0): Atomic delta-patching editor receiving QA directives or manual overrides.
+    Reads Champions and Error Log, merges modified/new `### FILE:` blocks into `reference_files`,
+    removes `### DELETE:` paths, and preserves untouched auxiliary files.
     """
     print(">>> Executing Node 3: The Upgrader")
 
@@ -575,20 +957,64 @@ def node_upgrader(state: FactoryState):
         champion_xml
     ).get("target_type", "SYSTEM_PROMPT")
     prompt = PromptTemplate.from_template(UPGRADER_PROMPT)
-    response = _invoke_with_compiler_fallback(
-        prompt,
-        {
+    response, telemetry = _invoke_role_with_fallback(
+        role="node_3_upgrader",
+        prompt_template=prompt,
+        inputs={
             "champion_xml": champion_xml,
             "champion_prompt": champion_prompt,
             "error_log": formatted_errors,
         },
         structured_schema=UpgraderOutput,
+        thinking_level="medium",
+        model_overrides=state.get("model_overrides"),
         target_type=current_target,
     )
 
     meta = extract_blueprint_meta(response.updated_xml)
-    primary_prompt, ref_files = parse_compiled_artifacts(response.updated_prompt)
-    merged_refs = {**(state.get("reference_files") or {}), **ref_files}
+    raw_updated_prompt = response.updated_prompt or ""
+    primary_prompt, ref_files = parse_compiled_artifacts(raw_updated_prompt)
+    deleted_paths = parse_deleted_artifacts(raw_updated_prompt)
+
+    merged_refs: Dict[str, str] = {}
+    for existing_path, existing_content in (state.get("reference_files") or {}).items():
+        norm_existing = normalize_artifact_path(existing_path)
+        if norm_existing:
+            merged_refs[norm_existing] = existing_content
+    merged_refs.update(ref_files)
+    for del_path in deleted_paths:
+        merged_refs.pop(del_path, None)
+
+    stripped_primary = re.sub(
+        r"<compilation_check>.*?</compilation_check>",
+        "",
+        primary_prompt or "",
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
+    if not stripped_primary:
+        primary_prompt = state.get("champion_prompt", "")
+    elif (
+        meta["target_type"] == "HYBRID_BUNDLE"
+        and ("SYSTEM_PROMPT.md" in merged_refs or "SKILL.md" in merged_refs)
+        and primary_prompt.lstrip().startswith("### FILE:")
+    ):
+        rebuilt_sections = [
+            f"### FILE: {fp}\n{merged_refs[fp]}"
+            for fp in ("SYSTEM_PROMPT.md", "SKILL.md")
+            if fp in merged_refs
+        ]
+        if rebuilt_sections:
+            comp_match = re.search(
+                r"(<compilation_check>.*?</compilation_check>)",
+                primary_prompt,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+            rebuilt_body = "\n\n".join(rebuilt_sections)
+            primary_prompt = (
+                f"{comp_match.group(1).strip()}\n\n{rebuilt_body}".strip()
+                if comp_match
+                else rebuilt_body
+            )
 
     update: Dict[str, Any] = {
         "challenger_xml": response.updated_xml,
@@ -596,6 +1022,10 @@ def node_upgrader(state: FactoryState):
         "target_type": meta["target_type"],
         "reference_files": merged_refs,
         "is_manual_override": is_override,
+        "model_telemetry": {
+            "node_3_upgrader": telemetry,
+            "last_execution": telemetry,
+        },
     }
     if meta["slug_name"]:
         update["slug_name"] = meta["slug_name"]
@@ -607,7 +1037,7 @@ class AdjudicatorDecision(BaseModel):
         description="Abstraction of the core intent and foundational success criteria."
     )
     audit_process: str = Field(
-        description="Execution of the BetterBot 2.0 6-Point Rubric Audit."
+        description="Execution of the BetterBot 2.0 Rubric Audit (6-Point standard / 7-Point for SKILL_SUITE)."
     )
     status: str = Field(description="Strictly one of: PASS, FAIL, ESCALATE")
     reason: str = Field(
@@ -634,7 +1064,7 @@ RUBRIC_SCORE_KEYS = (
 def node_adjudicator(state: FactoryState):
     """
     Node 4 (The Adjudicator 2.0 - QA): Two-stage hybrid gatekeeper combining
-    `gemini-decision-1` rubric scoring (with zero-token Fast Pass & Plateau Breaker)
+    `gemini-decision-1` target-aware rubric scoring (6-point standard or 7-point for SKILL_SUITE)
     and generative Adjudicator directives for targeted repairs.
     """
     print(">>> Executing Node 4: The Adjudicator")
@@ -644,10 +1074,28 @@ def node_adjudicator(state: FactoryState):
     champion_xml = state.get("champion_xml", "")
     raw_champion_prompt = state.get("champion_prompt", "")
     challenger_xml = state.get("challenger_xml", "")
-    raw_challenger_prompt = state.get("challenger_prompt", "")
+    raw_challenger_prompt = (
+        state.get("challenger_prompt") or state.get("final_prompt") or ""
+    )
     ref_files = state.get("reference_files") or {}
     champion_prompt = format_artifact_with_references(raw_champion_prompt, ref_files)
     challenger_prompt = format_artifact_with_references(raw_challenger_prompt, ref_files)
+
+    xml_target = (
+        extract_blueprint_meta(challenger_xml or champion_xml).get("target_type")
+        if (challenger_xml or champion_xml)
+        else ""
+    )
+    raw_target = state.get("target_type") or xml_target or "SYSTEM_PROMPT"
+    current_target = str(raw_target).strip().upper()
+    if current_target not in VALID_TARGET_TYPES:
+        current_target = "SYSTEM_PROMPT"
+
+    rubric_questions = get_rubric_questions(current_target)
+    active_score_keys = tuple(
+        q["name"] for q in rubric_questions if q.get("type") == "score"
+    )
+
     error_log = state.get("error_log", [])
     is_manual_override = bool(state.get("is_manual_override")) or bool(
         error_log and str(error_log[-1]).lstrip().startswith("[MANUAL OVERRIDE]")
@@ -669,8 +1117,21 @@ def node_adjudicator(state: FactoryState):
     prev_rubric = state.get("rubric_scores") or {}
     prev_weighted_avg = prev_rubric.get("weighted_average")
 
+    needs_aux = is_needs_auxiliary_files(
+        state.get("readiness_scores"), fallback_xml=challenger_xml
+    )
+    aux_ref_paths = get_auxiliary_reference_paths(ref_files)
+    monolith_guardrail_triggered = (
+        current_target in ("SKILL_PACKAGE", "HYBRID_BUNDLE")
+        and needs_aux
+        and len(aux_ref_paths) == 0
+    )
+
     # --- Stage A: Quantitative Rubric Evaluation via gemini-decision-1 ---
     eval_context = (
+        f"TARGET TYPE: {current_target}\n"
+        f"NEEDS AUXILIARY FILES: {needs_aux}\n"
+        f"AUXILIARY REFERENCES COUNT: {len(aux_ref_paths)}\n\n"
         f"USER INTENT:\n{effective_user_input}\n\n"
         f"CHALLENGER XML:\n{challenger_xml}\n\n"
         f"CHALLENGER ARTIFACT:\n{challenger_prompt}\n"
@@ -678,24 +1139,33 @@ def node_adjudicator(state: FactoryState):
     if iteration_count > 0 and champion_prompt:
         eval_context += f"\nCURRENT CHAMPION ARTIFACT:\n{champion_prompt}\n"
 
-    decision_eval = evaluate_with_decision_model(eval_context, ADJUDICATOR_RUBRIC_QUESTIONS)
+    decision_eval = evaluate_with_decision_model(eval_context, rubric_questions)
     used_decision = bool(decision_eval.get("used_decision_model"))
 
     rubric_scores: Dict[str, Any] = {"used_decision_model": used_decision}
     if used_decision:
         dim_scores = []
-        for k in RUBRIC_SCORE_KEYS:
+        for k in active_score_keys:
             val = float(decision_eval.get(k, 0.0))
             rubric_scores[k] = round(val, 2)
             dim_scores.append(val)
-        weighted_avg = sum(dim_scores) / (len(dim_scores) * 5.0)
+        if monolith_guardrail_triggered and "progressive_disclosure" in rubric_scores:
+            capped_pd = round(min(float(rubric_scores["progressive_disclosure"]), 2.0), 2)
+            rubric_scores["progressive_disclosure"] = capped_pd
+            dim_scores = [float(rubric_scores[k]) for k in active_score_keys]
+            print(
+                f"    -> [Guardrail] Capped progressive_disclosure at {capped_pd:.2f}/5.0 "
+                f"(target={current_target}, needs_auxiliary_files=True, references/*=0)"
+            )
+        max_total = (len(dim_scores) * 5.0) or 1.0
+        weighted_avg = sum(dim_scores) / max_total
         beats_champ = float(decision_eval.get("challenger_beats_champion", 1.0))
         rubric_scores["challenger_beats_champion"] = round(beats_champ, 3)
         rubric_scores["weighted_average"] = round(weighted_avg, 4)
 
         min_dim_score = min(dim_scores) if dim_scores else 0.0
         print(
-            f"    -> Decision Rubric Avg: {weighted_avg:.2f} | Min Dim: {min_dim_score:.2f}/5.0"
+            f"    -> Decision Rubric Avg ({len(dim_scores)}D): {weighted_avg:.2f} | Min Dim: {min_dim_score:.2f}/5.0"
         )
 
         # --- Stage B (Fast Pass / Post-Override Promotion): Skip generative LLM call if criteria met ---
@@ -713,6 +1183,16 @@ def node_adjudicator(state: FactoryState):
         if fast_pass_standard or post_override_pass:
             pass_mode = "Post-override PASS" if post_override_pass else "Fast PASS"
             print(f"    -> {pass_mode} via gemini-decision-1 (0 output tokens used)")
+            fast_telemetry = {
+                "role": "node_4_adjudicator",
+                "configured_model": DECISION_MODEL,
+                "model": DECISION_MODEL,
+                "thinking_level": "none",
+                "fallback_used": False,
+                "fallback_from": None,
+                "fast_path": "post_override_pass" if post_override_pass else "fast_pass",
+                "latency_ms": decision_eval.get("latency_ms", 0.0),
+            }
             return {
                 "iteration_count": iteration_count + 1,
                 "is_manual_override": False,
@@ -723,6 +1203,10 @@ def node_adjudicator(state: FactoryState):
                 "error_log": [
                     f"[PASS] {pass_mode} by gemini-decision-1 (score={weighted_avg:.2f})."
                 ],
+                "model_telemetry": {
+                    "node_4_adjudicator": fast_telemetry,
+                    "last_execution": fast_telemetry,
+                },
             }
 
         # --- Stage B (Plateau Breaker): Escalate if improvement stalled (bypassed after manual override) ---
@@ -735,6 +1219,16 @@ def node_adjudicator(state: FactoryState):
             print(
                 f"    -> Plateau detected ({prev_weighted_avg:.2f} -> {weighted_avg:.2f}). Escalating."
             )
+            plateau_telemetry = {
+                "role": "node_4_adjudicator",
+                "configured_model": DECISION_MODEL,
+                "model": DECISION_MODEL,
+                "thinking_level": "none",
+                "fallback_used": False,
+                "fallback_from": None,
+                "fast_path": "plateau_escalate",
+                "latency_ms": decision_eval.get("latency_ms", 0.0),
+            }
             return {
                 "iteration_count": iteration_count + 1,
                 "rubric_scores": rubric_scores,
@@ -742,35 +1236,56 @@ def node_adjudicator(state: FactoryState):
                     f"[ESCALATE] Reason: QA Plateau detected (rubric delta {weighted_avg - float(prev_weighted_avg):+.3f} < 0.02). | "
                     "Directive: Human review required to resolve persistent rubric gap."
                 ],
+                "model_telemetry": {
+                    "node_4_adjudicator": plateau_telemetry,
+                    "last_execution": plateau_telemetry,
+                },
             }
 
         formatted_rubric_scores = json.dumps(rubric_scores, indent=2)
     else:
-        formatted_rubric_scores = "Decision engine unavailable; rely on full 6-Point Rubric audit."
+        formatted_rubric_scores = (
+            f"Decision engine unavailable; rely on full {len(active_score_keys)}-Point Rubric audit."
+        )
+
+    if monolith_guardrail_triggered:
+        formatted_rubric_scores += (
+            "\n\n[DETERMINISTIC PROGRESSIVE DISCLOSURE GUARDRAIL TRIGGERED]\n"
+            f"target_type={current_target} has needs_auxiliary_files=True, yet 0 `references/*` files "
+            "exist in `state['reference_files']`. `progressive_disclosure` is deterministically capped at 2.0/5.0.\n"
+            "You MUST return status='FAIL' (NOT 'PASS') and instruct The Upgrader 2.0 in `correction_directive` "
+            "to refactor `SKILL.md` into a lean router + core guardrails, extract deep mode playbooks, concrete "
+            "domain standards/thresholds, tokens, and checklists into surgical `### FILE: references/<topic>.md` "
+            "files (zero shallow paraphrasing), and update `<PROGRESSIVE_DISCLOSURE_REFS>`."
+        )
 
     # --- Stage B (Pinpoint Fail / Fallback): Generative Adjudicator Audit ---
-    structured_llm = llm.with_structured_output(AdjudicatorDecision)
-
     if iteration_count == 0:
         print("    -> Mode: Baseline QA (Iteration 0)")
         prompt = PromptTemplate.from_template(ADJUDICATOR_BASELINE_PROMPT)
-        chain = prompt | structured_llm
-        decision = chain.invoke(
-            {
+        decision, telemetry = _invoke_role_with_fallback(
+            role="node_4_adjudicator",
+            prompt_template=prompt,
+            inputs={
                 "user_input": effective_user_input,
                 "challenger_xml": challenger_xml,
                 "challenger_prompt": challenger_prompt,
                 "decision_rubric_scores": formatted_rubric_scores,
                 "iteration_count": iteration_count,
-            }
+            },
+            structured_schema=AdjudicatorDecision,
+            thinking_level="low",
+            model_overrides=state.get("model_overrides"),
+            target_type=current_target,
         )
     else:
         print(f"    -> Mode: Regression QA (Iteration {iteration_count})")
         formatted_errors = "\n".join(error_log) if error_log else "None"
         prompt = PromptTemplate.from_template(ADJUDICATOR_REGRESSION_PROMPT)
-        chain = prompt | structured_llm
-        decision = chain.invoke(
-            {
+        decision, telemetry = _invoke_role_with_fallback(
+            role="node_4_adjudicator",
+            prompt_template=prompt,
+            inputs={
                 "user_input": effective_user_input,
                 "champion_xml": champion_xml,
                 "champion_prompt": champion_prompt,
@@ -779,7 +1294,25 @@ def node_adjudicator(state: FactoryState):
                 "error_log": formatted_errors,
                 "decision_rubric_scores": formatted_rubric_scores,
                 "iteration_count": iteration_count,
-            }
+            },
+            structured_schema=AdjudicatorDecision,
+            thinking_level="low",
+            model_overrides=state.get("model_overrides"),
+            target_type=current_target,
+        )
+
+    if monolith_guardrail_triggered and decision.status == "PASS":
+        decision.status = "FAIL"
+        decision.reason = (
+            f"Deterministic Progressive Disclosure Guardrail: `{current_target}` requires auxiliary "
+            "`references/*` files (`needs_auxiliary_files=True`), yet 0 `references/*` files were produced "
+            "(capped `progressive_disclosure` at 2.0/5.0)."
+        )
+        decision.correction_directive = (
+            "Refactor `SKILL.md` into a lean router + core guardrails, extract deep mode playbooks, concrete "
+            "domain standards/thresholds, tokens, and checklists into surgical `### FILE: references/<topic>.md` "
+            "files with full production-grade operational depth (no shallow paraphrasing), and list those files "
+            "inside `<PROGRESSIVE_DISCLOSURE_REFS>` in `<ARTIFACT_BLUEPRINT>`."
         )
 
     print(f"    -> Decision: {decision.status}")
@@ -788,6 +1321,10 @@ def node_adjudicator(state: FactoryState):
         "iteration_count": iteration_count + 1,
         "is_manual_override": False,
         "rubric_scores": rubric_scores,
+        "model_telemetry": {
+            "node_4_adjudicator": telemetry,
+            "last_execution": telemetry,
+        },
     }
 
     if (
@@ -913,6 +1450,7 @@ def run_factory():
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
+        "model_telemetry": {},
     }
 
     while True:

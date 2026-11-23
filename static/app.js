@@ -11,11 +11,20 @@ let activeStreamingNode = null;
 let activeStreamingDesc = "";
 let timelineFilterQuery = "";
 let activeArtifactFile = "__primary__";
+const collapsedSuiteFolders = new Set();
 let cachedSessionsList = [];
 let historyFilterType = "ALL";
 let historySearchQuery = "";
 let isMasterMode = false;
 let isMasterConfigured = null;
+let healthRouting = null;
+let activeStreamController = null;
+let streamElapsedTimer = null;
+let streamStartTime = 0;
+let lastStreamCta = null;
+let bettyClearConfirmTimer = null;
+let isSyncingScroll = false;
+let focusTrapCleanup = null;
 
 const STORAGE_KEYS = {
   ACTIVE_SESSION_ID: "betterbot_active_session_id",
@@ -46,7 +55,51 @@ const ICONS = {
   wrench: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"></path></svg>`,
   layers: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>`,
   trash: `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path></svg>`,
+  folder: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`,
+  chevronDown: `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>`,
 };
+
+function getTargetBadgeClass(targetType) {
+  return String(targetType || "").trim().toUpperCase() === "SKILL_SUITE"
+    ? "target-type-badge target-suite"
+    : "target-type-badge";
+}
+
+function getFirstSuiteSkillPath(refFiles) {
+  const keys = Object.keys(refFiles || {});
+  if (keys.length === 0) return "__primary__";
+  const nestedSkill = keys.find((k) => /^skills\/[^/]+\/SKILL\.md$/i.test(k));
+  if (nestedSkill) return nestedSkill;
+  const anySkill = keys.find((k) => /(^|\/)SKILL\.md$/i.test(k));
+  return anySkill || keys[0];
+}
+
+function resolveActiveArtifactFile(session) {
+  if (!session) {
+    activeArtifactFile = "__primary__";
+    return activeArtifactFile;
+  }
+  const st = session.state || {};
+  const targetType = String(session.target_type || st.target_type || "SYSTEM_PROMPT")
+    .trim()
+    .toUpperCase();
+  const refFiles = session.reference_files || st.reference_files || {};
+  const refKeys = Object.keys(refFiles);
+  const primaryText = (getBestPrompt(session) || "").trim();
+
+  if (activeArtifactFile !== "__primary__" && refFiles[activeArtifactFile] === undefined) {
+    activeArtifactFile = "__primary__";
+  }
+
+  if (activeArtifactFile === "__primary__" && refKeys.length > 0) {
+    const isMinimalOrEmptySuite =
+      targetType === "SKILL_SUITE" && primaryText.length < 80;
+    if (!primaryText || isMinimalOrEmptySuite) {
+      activeArtifactFile = getFirstSuiteSkillPath(refFiles);
+    }
+  }
+  return activeArtifactFile;
+}
 
 const NODE_ROLES = {
   node_1_helper: "Node 1: The Helper — ארכיטקט דרישות וראיון",
@@ -64,10 +117,10 @@ const NODE_SHORT_LABELS = {
 
 const els = {
   modelNameText: document.getElementById("modelNameText"),
-  sessionSelect: document.getElementById("sessionSelect"),
   newSessionBtn: document.getElementById("newSessionBtn"),
   historyLibraryWrap: document.getElementById("historyLibraryWrap"),
   historyLibraryBtn: document.getElementById("historyLibraryBtn"),
+  activeSessionLabel: document.getElementById("activeSessionLabel"),
   historyCountBadge: document.getElementById("historyCountBadge"),
   historyLibraryPopover: document.getElementById("historyLibraryPopover"),
   historySearchInput: document.getElementById("historySearchInput"),
@@ -77,6 +130,7 @@ const els = {
 
   headerTelemetryPill: document.getElementById("headerTelemetryPill"),
   telemetryLiveDot: document.getElementById("telemetryLiveDot"),
+  navStatusDot: document.getElementById("navStatusDot"),
   headerActiveNodeText: document.getElementById("headerActiveNodeText"),
   globalStageBadge: document.getElementById("globalStageBadge"),
   globalStageDesc: document.getElementById("globalStageDesc"),
@@ -85,11 +139,18 @@ const els = {
   archCbText: document.getElementById("archCbText"),
   timelineCountPill: document.getElementById("timelineCountPill"),
 
+  chatCanvasScroll: document.getElementById("chatCanvasScroll"),
   presetsContainer: document.getElementById("presetsContainer"),
   chatMessages: document.getElementById("chatMessages"),
   activeExecutionBar: document.getElementById("activeExecutionBar"),
+  execSpinnerRing: document.getElementById("execSpinnerRing"),
   execNodeTitle: document.getElementById("execNodeTitle"),
+  execStageText: document.getElementById("execStageText"),
   execNodeDesc: document.getElementById("execNodeDesc"),
+  execElapsedTime: document.getElementById("execElapsedTime"),
+  execActionCta: document.getElementById("execActionCta"),
+  stopStreamBtn: document.getElementById("stopStreamBtn"),
+  execDismissBtn: document.getElementById("execDismissBtn"),
 
   chatForm: document.getElementById("chatForm"),
   userInput: document.getElementById("userInput"),
@@ -129,10 +190,15 @@ const els = {
   artifactUpgraderForm: document.getElementById("artifactUpgraderForm"),
   artifactUpgraderInput: document.getElementById("artifactUpgraderInput"),
   artifactUpgraderSendBtn: document.getElementById("artifactUpgraderSendBtn"),
+  qaUpgraderForm: document.getElementById("qaUpgraderForm"),
+  qaUpgraderInput: document.getElementById("qaUpgraderInput"),
+  qaUpgraderSendBtn: document.getElementById("qaUpgraderSendBtn"),
 
   decisionRubricCard: document.getElementById("decisionRubricCard"),
   qaLogsList: document.getElementById("qaLogsList"),
   diffComparisonSection: document.getElementById("diffComparisonSection"),
+  diffStatsBadge: document.getElementById("diffStatsBadge"),
+  diffZeroChangesBanner: document.getElementById("diffZeroChangesBanner"),
   diffUnifiedContainer: document.getElementById("diffUnifiedContainer"),
   diffUnifiedPre: document.getElementById("diffUnifiedPre"),
   diffSplitContainer: document.getElementById("diffSplitContainer"),
@@ -166,6 +232,7 @@ const els = {
   exportWorkspaceBtn: document.getElementById("exportWorkspaceBtn"),
   importWorkspaceBtn: document.getElementById("importWorkspaceBtn"),
   importWorkspaceFileInput: document.getElementById("importWorkspaceFileInput"),
+  bettyClearBtnLabel: document.getElementById("bettyClearBtnLabel"),
 };
 
 // ==========================================
@@ -290,12 +357,65 @@ async function initWorkspaceAuth() {
   updateWorkspaceSyncUI();
 }
 
+function releaseFocusTrap() {
+  if (typeof focusTrapCleanup === "function") {
+    focusTrapCleanup();
+    focusTrapCleanup = null;
+  }
+}
+
+function trapFocus(modalEl, triggerEl) {
+  releaseFocusTrap();
+  if (!modalEl) return;
+  const previousFocus = triggerEl || document.activeElement;
+  const selector =
+    'button:not([disabled]):not(.hidden), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  const getFocusable = () =>
+    Array.from(modalEl.querySelectorAll(selector)).filter(
+      (el) => !el.closest(".hidden") && el.offsetParent !== null
+    );
+
+  const onKeyDown = (e) => {
+    if (e.key !== "Tab") return;
+    const focusables = getFocusable();
+    if (!focusables.length) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first || !modalEl.contains(document.activeElement)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (document.activeElement === last || !modalEl.contains(document.activeElement)) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  modalEl.addEventListener("keydown", onKeyDown);
+  const initialFocusables = getFocusable();
+  if (initialFocusables.length > 0) {
+    initialFocusables[0].focus();
+  }
+
+  focusTrapCleanup = () => {
+    modalEl.removeEventListener("keydown", onKeyDown);
+    if (previousFocus && typeof previousFocus.focus === "function") {
+      previousFocus.focus();
+    }
+  };
+}
+
 async function openWorkspaceSyncModal() {
   if (!els.workspaceSyncModal) return;
   showMasterKeyFeedback("");
   if (els.masterKeyInput) els.masterKeyInput.value = "";
   updateWorkspaceSyncUI();
   els.workspaceSyncModal.classList.remove("hidden");
+  trapFocus(els.workspaceSyncModal, els.workspaceSyncBtn || document.activeElement);
 
   if (!isMasterMode && isMasterConfigured === null) {
     try {
@@ -318,16 +438,17 @@ async function openWorkspaceSyncModal() {
 function closeWorkspaceSyncModal() {
   if (!els.workspaceSyncModal) return;
   els.workspaceSyncModal.classList.add("hidden");
+  releaseFocusTrap();
 }
 
 async function reloadWorkspaceState(resetActiveSession = true) {
   if (resetActiveSession) {
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
     currentSession = null;
+    activeArtifactFile = "__primary__";
+    collapsedSuiteFolders.clear();
   }
-  if (els.historyLibraryPopover) {
-    els.historyLibraryPopover.classList.add("hidden");
-  }
+  setHistoryPopoverOpen(false);
   await initSession();
   await refreshBettyHistory();
 }
@@ -403,12 +524,45 @@ async function checkHealth() {
   try {
     const res = await fetch("/api/health");
     const data = await res.json();
+    if (data.routing) {
+      healthRouting = data.routing;
+      renderNodeModelTags(currentSession);
+    }
     if (data.model && els.modelNameText) {
       els.modelNameText.textContent = data.model;
     }
   } catch (err) {
     console.warn("Health check error:", err);
   }
+}
+
+function formatModelBadgeText(info) {
+  if (!info || !info.model) return "";
+  const levelMap = { medium: "med", low: "low", high: "high", none: "fast" };
+  const lvl = levelMap[info.thinking_level] || info.thinking_level || "";
+  if (info.fallback_used) {
+    return lvl ? `fallback → ${info.model} · ${lvl}` : `fallback → ${info.model}`;
+  }
+  return lvl ? `${info.model} · ${lvl}` : info.model;
+}
+
+function renderNodeModelTags(session) {
+  const telemetry = session?.model_telemetry || session?.state?.model_telemetry || {};
+  const nodes = ["node_1_helper", "node_2_construct", "node_3_upgrader", "node_4_adjudicator"];
+  nodes.forEach((nid) => {
+    const el = document.getElementById(`model-${nid}`);
+    if (!el) return;
+    const nodeInfo = telemetry[nid] || healthRouting?.[nid] || null;
+    if (!nodeInfo || !nodeInfo.model) {
+      el.textContent = "";
+      el.classList.remove("is-fallback");
+      return;
+    }
+    el.textContent = formatModelBadgeText(nodeInfo);
+    el.classList.toggle("is-fallback", Boolean(nodeInfo.fallback_used));
+    const configured = nodeInfo.configured_model ? ` (configured: ${nodeInfo.configured_model})` : "";
+    el.title = `Model: ${nodeInfo.model}${configured} | thinking_level=${nodeInfo.thinking_level || "default"}`;
+  });
 }
 
 async function initSession() {
@@ -436,6 +590,17 @@ async function initSession() {
   }
 }
 
+function resetPostStreamBarAndDots() {
+  lastStreamCta = null;
+  if (els.activeExecutionBar) {
+    els.activeExecutionBar.classList.add("hidden");
+    els.activeExecutionBar.classList.remove("is-completed", "tone-pass", "tone-escalate");
+  }
+  document.querySelectorAll(".nav-rail-btn .nav-notify-dot").forEach((dot) => {
+    dot.className = "nav-notify-dot hidden";
+  });
+}
+
 async function loadSessionById(sessionId, closeHistory = true) {
   if (!sessionId || isStreaming) return;
   const res = await apiFetch(`/api/sessions/${sessionId}`);
@@ -452,13 +617,16 @@ async function loadSessionById(sessionId, closeHistory = true) {
     }
     throw new Error(`HTTP ${res.status}`);
   }
+  resetPostStreamBarAndDots();
   currentSession = await res.json();
   activeArtifactFile = "__primary__";
+  collapsedSuiteFolders.clear();
+  resolveActiveArtifactFile(currentSession);
   localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
   await refreshSessionSelector();
   renderAll(currentSession);
-  if (closeHistory && els.historyLibraryPopover) {
-    els.historyLibraryPopover.classList.add("hidden");
+  if (closeHistory) {
+    setHistoryPopoverOpen(false);
   }
 }
 
@@ -468,13 +636,20 @@ async function createNewSession() {
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
   }
+  resetPostStreamBarAndDots();
   currentSession = await res.json();
   activeArtifactFile = "__primary__";
+  collapsedSuiteFolders.clear();
   localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, currentSession.session_id);
   await refreshSessionSelector();
   switchWorkspaceView("view-interview");
   renderAll(currentSession);
   els.userInput.focus();
+}
+
+function updateActiveSessionPillLabel(session) {
+  if (!els.activeSessionLabel) return;
+  els.activeSessionLabel.textContent = (session && session.title) || "סוכן חדש";
 }
 
 async function refreshSessionSelector() {
@@ -483,16 +658,7 @@ async function refreshSessionSelector() {
   const data = await res.json();
   cachedSessionsList = data.sessions || [];
 
-  els.sessionSelect.innerHTML = "";
-  cachedSessionsList.forEach((s) => {
-    const opt = document.createElement("option");
-    opt.value = s.session_id;
-    opt.textContent = `${s.title} (${s.target_type || "PROMPT"})`;
-    if (currentSession && s.session_id === currentSession.session_id) {
-      opt.selected = true;
-    }
-    els.sessionSelect.appendChild(opt);
-  });
+  updateActiveSessionPillLabel(currentSession);
 
   if (els.historyCountBadge) {
     els.historyCountBadge.textContent = String(cachedSessionsList.length);
@@ -512,7 +678,31 @@ function renderHistoryLibraryList() {
   });
 
   if (filtered.length === 0) {
-    els.historyLibraryList.innerHTML = `<div class="empty-state" style="min-height:110px;padding:12px;"><p>לא נמצאו יצירות תואמות.</p></div>`;
+    const hasActiveFilter = Boolean(q || historyFilterType !== "ALL");
+    const filterMsg = hasActiveFilter
+      ? `לא נמצאו יצירות עבור ${q ? `"${escapeHtml(historySearchQuery.trim())}"` : `סוג ${escapeHtml(historyFilterType)}`}.`
+      : "עדיין אין יצירות שמורות במרחב זה.";
+    els.historyLibraryList.innerHTML = `
+      <div class="empty-state" style="min-height:110px;padding:12px;gap:10px;">
+        <p>${filterMsg}</p>
+        ${hasActiveFilter ? `<button type="button" class="btn btn-secondary btn-sm history-clear-filter-btn">נקה סינון וחיפוש</button>` : ""}
+      </div>
+    `;
+    const clearFilterBtn = els.historyLibraryList.querySelector(".history-clear-filter-btn");
+    if (clearFilterBtn) {
+      clearFilterBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        historySearchQuery = "";
+        historyFilterType = "ALL";
+        if (els.historySearchInput) els.historySearchInput.value = "";
+        if (els.historyFilterBar) {
+          els.historyFilterBar.querySelectorAll(".history-filter-chip").forEach((c) => {
+            c.classList.toggle("active", c.dataset.filter === "ALL");
+          });
+        }
+        renderHistoryLibraryList();
+      });
+    }
     return;
   }
 
@@ -532,46 +722,123 @@ function renderHistoryLibraryList() {
     const timeLabel = formatRelativeTime(s.updated_at_iso || s.updated_at || s.created_at);
 
     item.innerHTML = `
-      <div class="history-item-main">
+      <button type="button" class="history-item-main">
         <div class="history-item-title">${escapeHtml(s.title || "ללא שם")}</div>
         <div class="history-item-meta">
-          <span class="target-type-badge">${escapeHtml(s.target_type || "SYSTEM_PROMPT")}</span>
+          <span class="${getTargetBadgeClass(s.target_type)}">${escapeHtml(s.target_type || "SYSTEM_PROMPT")}</span>
           <span class="status-badge ${statusCls}">${escapeHtml(statusUpper)}</span>
           <span class="history-time">${escapeHtml(timeLabel)}</span>
         </div>
-      </div>
+      </button>
       <div class="history-item-actions">
         <button type="button" class="history-action-btn rename" title="שנה שם">${ICONS.edit}</button>
         <button type="button" class="history-action-btn delete" title="מחק יצירה">${ICONS.trash}</button>
       </div>
     `;
 
-    item.querySelector(".history-item-main").addEventListener("click", () => {
+    const mainBtn = item.querySelector(".history-item-main");
+    const titleEl = item.querySelector(".history-item-title");
+    let isRenaming = false;
+
+    mainBtn.addEventListener("click", () => {
+      if (isRenaming) return;
       loadSessionById(s.session_id, true);
     });
 
-    item.querySelector(".history-action-btn.rename").addEventListener("click", async (e) => {
+    item.querySelector(".history-action-btn.rename").addEventListener("click", (e) => {
       e.stopPropagation();
-      const nextTitle = window.prompt("הזן שם חדש ליצירה:", s.title || "");
-      if (!nextTitle || !nextTitle.trim()) return;
-      const resp = await apiFetch(`/api/sessions/${s.session_id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: nextTitle.trim() }),
-      });
-      if (resp.ok) {
-        const updated = await resp.json();
-        if (currentSession && currentSession.session_id === s.session_id) {
-          currentSession = updated;
+      if (isRenaming) return;
+      isRenaming = true;
+      const originalTitle = s.title || "";
+      const renameInput = document.createElement("input");
+      renameInput.type = "text";
+      renameInput.className = "history-inline-rename";
+      renameInput.value = originalTitle;
+      renameInput.setAttribute("aria-label", "שם חדש ליצירה");
+
+      titleEl.textContent = "";
+      titleEl.appendChild(renameInput);
+      renameInput.focus();
+      renameInput.select();
+
+      let finished = false;
+      const restoreTitle = () => {
+        isRenaming = false;
+        titleEl.textContent = s.title || "ללא שם";
+      };
+
+      const commitRename = async () => {
+        if (finished) return;
+        finished = true;
+        const nextTitle = renameInput.value.trim();
+        if (!nextTitle || nextTitle === originalTitle.trim()) {
+          restoreTitle();
+          return;
         }
-        await refreshSessionSelector();
-        showToast("שם היצירה עודכן", "check");
-      }
+        try {
+          const resp = await apiFetch(`/api/sessions/${s.session_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: nextTitle }),
+          });
+          if (resp.ok) {
+            const updated = await resp.json();
+            if (currentSession && currentSession.session_id === s.session_id) {
+              currentSession = updated;
+              updateActiveSessionPillLabel(currentSession);
+            }
+            await refreshSessionSelector();
+            showToast("שם היצירה עודכן", "check");
+          } else {
+            restoreTitle();
+            showToast("שגיאה בעדכון שם היצירה", "alert");
+          }
+        } catch {
+          restoreTitle();
+          showToast("שגיאת תקשורת בעדכון השם", "alert");
+        }
+      };
+
+      renameInput.addEventListener("click", (ev) => ev.stopPropagation());
+      renameInput.addEventListener("keyup", (ev) => ev.stopPropagation());
+      renameInput.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          commitRename();
+        } else if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          finished = true;
+          restoreTitle();
+        }
+      });
+      renameInput.addEventListener("blur", () => {
+        if (!finished) {
+          commitRename();
+        }
+      });
     });
 
-    item.querySelector(".history-action-btn.delete").addEventListener("click", async (e) => {
+    const deleteBtn = item.querySelector(".history-action-btn.delete");
+    let deleteConfirmTimer = null;
+    deleteBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!window.confirm(`למחוק את "${s.title}" מההיסטוריה?`)) return;
+      if (!deleteBtn.classList.contains("is-confirming")) {
+        deleteBtn.classList.add("is-confirming");
+        deleteBtn.textContent = "בטוח?";
+        deleteBtn.title = "לחץ שוב לאישור מחיקה";
+        if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
+        deleteConfirmTimer = setTimeout(() => {
+          deleteBtn.classList.remove("is-confirming");
+          deleteBtn.innerHTML = ICONS.trash;
+          deleteBtn.title = "מחק יצירה";
+        }, 3500);
+        return;
+      }
+
+      if (deleteConfirmTimer) clearTimeout(deleteConfirmTimer);
+      deleteBtn.disabled = true;
       const resp = await apiFetch(`/api/sessions/${s.session_id}`, { method: "DELETE" });
       if (resp.ok) {
         if (currentSession && currentSession.session_id === s.session_id) {
@@ -582,6 +849,11 @@ function renderHistoryLibraryList() {
           await refreshSessionSelector();
         }
         showToast("היצירה נמחקה", "trash");
+      } else {
+        deleteBtn.disabled = false;
+        deleteBtn.classList.remove("is-confirming");
+        deleteBtn.innerHTML = ICONS.trash;
+        showToast("שגיאה במחיקת היצירה", "alert");
       }
     });
 
@@ -605,10 +877,27 @@ function formatRelativeTime(isoOrClock) {
 // ==========================================
 // Multi-Window Studio Routing & Sub-Tab Switching
 // ==========================================
+function setNavNotification(viewId, tone = "info") {
+  if (!viewId || activeWorkspaceView === viewId) return;
+  const btn = document.querySelector(`.nav-rail-btn[data-view="${viewId}"]`);
+  const dot = btn?.querySelector(".nav-notify-dot");
+  if (!dot) return;
+  dot.className = `nav-notify-dot tone-${tone}`;
+}
+
+function clearNavNotification(viewId) {
+  if (!viewId) return;
+  const btn = document.querySelector(`.nav-rail-btn[data-view="${viewId}"]`);
+  const dot = btn?.querySelector(".nav-notify-dot");
+  if (!dot) return;
+  dot.className = "nav-notify-dot hidden";
+}
+
 function switchWorkspaceView(viewId) {
   if (!viewId) return;
   activeWorkspaceView = viewId;
   localStorage.setItem(STORAGE_KEYS.ACTIVE_VIEW, viewId);
+  clearNavNotification(viewId);
 
   document.querySelectorAll(".nav-rail-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === viewId);
@@ -654,20 +943,22 @@ function switchTab(tabId) {
 // ==========================================
 // Event Bindings
 // ==========================================
+function setHistoryPopoverOpen(isOpen) {
+  if (!els.historyLibraryPopover || !els.historyLibraryBtn) return;
+  els.historyLibraryPopover.classList.toggle("hidden", !isOpen);
+  els.historyLibraryBtn.setAttribute("aria-expanded", isOpen ? "true" : "false");
+}
+
 function bindUIEvents() {
   els.newSessionBtn.addEventListener("click", createNewSession);
-
-  els.sessionSelect.addEventListener("change", async (e) => {
-    const sid = e.target.value;
-    await loadSessionById(sid, true);
-  });
 
   // Creation History Library Popover Toggle, Search & Filter
   if (els.historyLibraryBtn && els.historyLibraryPopover) {
     els.historyLibraryBtn.addEventListener("click", async (e) => {
       e.stopPropagation();
-      const isHidden = els.historyLibraryPopover.classList.toggle("hidden");
-      if (!isHidden) {
+      const willOpen = els.historyLibraryPopover.classList.contains("hidden");
+      setHistoryPopoverOpen(willOpen);
+      if (willOpen) {
         await refreshSessionSelector();
         if (els.historySearchInput) els.historySearchInput.focus();
       }
@@ -679,7 +970,7 @@ function bindUIEvents() {
         !els.historyLibraryWrap.contains(e.target) &&
         !els.historyLibraryPopover.classList.contains("hidden")
       ) {
-        els.historyLibraryPopover.classList.add("hidden");
+        setHistoryPopoverOpen(false);
       }
     });
   }
@@ -770,11 +1061,13 @@ function bindUIEvents() {
       if (isStreaming) return;
       const prompt = card.dataset.prompt || "";
       els.userInput.value = prompt;
+      autoResizeTextarea(els.userInput);
       els.userInput.focus();
       els.userInput.setSelectionRange(prompt.length, prompt.length);
-      els.userInput.classList.remove("input-flash");
-      void els.userInput.offsetWidth; // trigger reflow
-      els.userInput.classList.add("input-flash");
+      const inputShell = els.userInput.closest(".input-row") || els.userInput;
+      inputShell.classList.remove("input-flash");
+      void inputShell.offsetWidth; // trigger reflow
+      inputShell.classList.add("input-flash");
       showToast("ההצעה הועתקה לתיבת הטקסט — ניתן לערוך וללחוץ על 'שלח'", "edit");
     });
   });
@@ -797,6 +1090,8 @@ function bindUIEvents() {
     }
   });
 
+  els.userInput.addEventListener("input", () => autoResizeTextarea(els.userInput));
+
   // Quick Upgrader Command Bar inside view-artifacts
   if (els.artifactUpgraderForm && els.artifactUpgraderInput) {
     els.artifactUpgraderForm.addEventListener("submit", (e) => {
@@ -806,6 +1101,69 @@ function bindUIEvents() {
       els.artifactUpgraderInput.value = "";
       sendUserMessage(text);
     });
+  }
+
+  // Contextual Upgrader Command Bar inside view-qa
+  if (els.qaUpgraderForm && els.qaUpgraderInput) {
+    els.qaUpgraderForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const text = els.qaUpgraderInput.value.trim();
+      if (!text || isStreaming) return;
+      els.qaUpgraderInput.value = "";
+      sendUserMessage(text);
+    });
+  }
+
+  // Stop Active SSE Stream (AbortController) & Execution Bar Controls
+  if (els.stopStreamBtn) {
+    els.stopStreamBtn.addEventListener("click", () => {
+      if (activeStreamController) {
+        activeStreamController.abort();
+      }
+    });
+  }
+
+  if (els.execDismissBtn) {
+    els.execDismissBtn.addEventListener("click", () => {
+      lastStreamCta = null;
+      if (els.activeExecutionBar) {
+        els.activeExecutionBar.classList.add("hidden");
+        els.activeExecutionBar.classList.remove("is-completed", "tone-pass", "tone-escalate");
+      }
+    });
+  }
+
+  if (els.execActionCta) {
+    els.execActionCta.addEventListener("click", () => {
+      if (lastStreamCta && typeof lastStreamCta.action === "function") {
+        lastStreamCta.action();
+      }
+    });
+  }
+
+  // Side-by-Side Diff Scroll Synchronization (re-entrancy locked)
+  const syncDiffScroll = (sourceEl, targetEl) => {
+    if (!sourceEl || !targetEl || isSyncingScroll) return;
+    isSyncingScroll = true;
+    const maxSource = sourceEl.scrollHeight - sourceEl.clientHeight;
+    const maxTarget = targetEl.scrollHeight - targetEl.clientHeight;
+    if (maxSource > 0 && maxTarget > 0) {
+      const ratio = sourceEl.scrollTop / maxSource;
+      targetEl.scrollTop = ratio * maxTarget;
+    } else {
+      targetEl.scrollTop = sourceEl.scrollTop;
+    }
+    requestAnimationFrame(() => {
+      isSyncingScroll = false;
+    });
+  };
+  if (els.diffChampionPre && els.diffChallengerPre) {
+    els.diffChampionPre.addEventListener("scroll", () =>
+      syncDiffScroll(els.diffChampionPre, els.diffChallengerPre)
+    );
+    els.diffChallengerPre.addEventListener("scroll", () =>
+      syncDiffScroll(els.diffChallengerPre, els.diffChampionPre)
+    );
   }
 
   // Timeline Search Filter
@@ -838,11 +1196,18 @@ function bindUIEvents() {
   els.downloadPromptBtn.addEventListener("click", () => {
     const contentText = getActiveArtifactContent(currentSession);
     if (!contentText) return;
+    const resolvedFile = resolveActiveArtifactFile(currentSession);
     const targetType = currentSession?.target_type || "SYSTEM_PROMPT";
-    const defaultName = targetType === "SKILL_PACKAGE" ? "SKILL.md" : `system_prompt_${currentSession?.session_id || "gem"}.md`;
+    const defaultName =
+      targetType === "SKILL_PACKAGE"
+        ? "SKILL.md"
+        : `system_prompt_${currentSession?.session_id || "gem"}.md`;
+    const suiteSkillMatch = resolvedFile.match(/^skills\/([^/]+)\/SKILL\.md$/i);
     const fileName =
-      activeArtifactFile !== "__primary__"
-        ? activeArtifactFile.split("/").pop()
+      resolvedFile !== "__primary__"
+        ? suiteSkillMatch
+          ? `${suiteSkillMatch[1]}-SKILL.md`
+          : resolvedFile.split("/").pop()
         : defaultName;
     const blob = new Blob([contentText], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -908,12 +1273,28 @@ function bindUIEvents() {
     });
   }
   document.addEventListener("keydown", (e) => {
-    if (
-      e.key === "Escape" &&
-      els.workspaceSyncModal &&
-      !els.workspaceSyncModal.classList.contains("hidden")
-    ) {
+    if (e.key !== "Escape") return;
+    if (e.target && e.target.classList && e.target.classList.contains("history-inline-rename")) {
+      return;
+    }
+    if (els.workspaceSyncModal && !els.workspaceSyncModal.classList.contains("hidden")) {
       closeWorkspaceSyncModal();
+      return;
+    }
+    if (els.historyLibraryPopover && !els.historyLibraryPopover.classList.contains("hidden")) {
+      setHistoryPopoverOpen(false);
+      if (els.historyLibraryBtn) els.historyLibraryBtn.focus();
+      return;
+    }
+    const bettyWin = document.getElementById("bettyWindow");
+    const bettyFab = document.getElementById("bettyFab");
+    if (bettyWin && !bettyWin.classList.contains("hidden") && !bettyWin.classList.contains("docked")) {
+      bettyWin.classList.add("hidden");
+      if (bettyFab) {
+        bettyFab.classList.remove("active");
+        bettyFab.setAttribute("aria-expanded", "false");
+        bettyFab.focus();
+      }
     }
   });
 
@@ -1022,13 +1403,60 @@ function bindUIEvents() {
 // ==========================================
 // Streaming Execution (SSE)
 // ==========================================
+function formatElapsedSeconds(totalSec) {
+  const mins = String(Math.floor(totalSec / 60)).padStart(2, "0");
+  const secs = String(totalSec % 60).padStart(2, "0");
+  return `${mins}:${secs}`;
+}
+
+function getStageLabelForNode(nodeId, session) {
+  const stageMap = {
+    node_1_helper: "שלב 1/4",
+    node_2_construct: "שלב 2/4",
+    node_4_adjudicator: "שלב 3/4",
+    node_3_upgrader: "שלב 4/4",
+  };
+  const base = stageMap[nodeId] || "פעיל";
+  const iter = session?.state?.iteration_count || 0;
+  return iter > 0 ? `${base} · איטרציה ${iter}/3` : base;
+}
+
 async function sendUserMessage(messageText) {
   if (!currentSession || isStreaming) return;
   isStreaming = true;
+  lastStreamCta = null;
+  let wasAborted = false;
+  activeStreamController = new AbortController();
+
   els.userInput.value = "";
+  resetTextareaHeight(els.userInput);
   els.sendBtn.disabled = true;
   if (els.artifactUpgraderSendBtn) els.artifactUpgraderSendBtn.disabled = true;
+  if (els.qaUpgraderSendBtn) els.qaUpgraderSendBtn.disabled = true;
   els.presetsContainer.classList.add("hidden");
+  if (els.chatCanvasScroll) els.chatCanvasScroll.classList.remove("is-onboarding");
+  if (els.chatMessages) els.chatMessages.classList.remove("hidden");
+
+  if (els.activeExecutionBar) {
+    els.activeExecutionBar.classList.remove("hidden", "is-completed", "tone-pass", "tone-escalate");
+  }
+  if (els.execSpinnerRing) els.execSpinnerRing.classList.remove("hidden");
+  if (els.stopStreamBtn) els.stopStreamBtn.classList.remove("hidden");
+  if (els.execActionCta) els.execActionCta.classList.add("hidden");
+  if (els.execDismissBtn) els.execDismissBtn.classList.add("hidden");
+  if (els.execNodeTitle) els.execNodeTitle.textContent = "מאתחל צינור סוכנים...";
+  if (els.execStageText) els.execStageText.textContent = "שלב 1/4";
+  if (els.execNodeDesc) els.execNodeDesc.textContent = "מעבד הנחיה...";
+  if (els.execElapsedTime) els.execElapsedTime.textContent = "00:00";
+
+  streamStartTime = Date.now();
+  if (streamElapsedTimer) clearInterval(streamElapsedTimer);
+  streamElapsedTimer = setInterval(() => {
+    if (els.execElapsedTime) {
+      const elapsedSec = Math.max(0, Math.floor((Date.now() - streamStartTime) / 1000));
+      els.execElapsedTime.textContent = formatElapsedSeconds(elapsedSec);
+    }
+  }, 1000);
 
   // Optimistically render user bubble
   appendOptimisticUserBubble(messageText);
@@ -1038,16 +1466,23 @@ async function sendUserMessage(messageText) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: messageText, mode: "auto" }),
+      signal: activeStreamController.signal,
     });
 
     // Auto-recover if server restarted and session ID was evicted
     if (response.status === 404) {
-      const res = await apiFetch("/api/sessions", { method: "POST" });
+      const res = await apiFetch("/api/sessions", {
+        method: "POST",
+        signal: activeStreamController.signal,
+      });
       currentSession = await res.json();
+      activeArtifactFile = "__primary__";
+      collapsedSuiteFolders.clear();
       response = await apiFetch(`/api/sessions/${currentSession.session_id}/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: messageText, mode: "auto" }),
+        signal: activeStreamController.signal,
       });
     }
 
@@ -1072,18 +1507,61 @@ async function sendUserMessage(messageText) {
       }
     }
   } catch (err) {
-    // Restore user's message input so nothing is lost on network failure
-    if (els.userInput && !els.userInput.value) {
-      els.userInput.value = messageText;
+    if (err && err.name === "AbortError") {
+      wasAborted = true;
+      showToast("ההזרמה נעצרה בצד הלקוח", "check");
+    } else {
+      // Restore user's message input so nothing is lost on network failure
+      if (els.userInput && !els.userInput.value) {
+        els.userInput.value = messageText;
+        autoResizeTextarea(els.userInput);
+      }
+      showToast(`שגיאת תקשורת: ${err.message}`, "alert");
     }
-    showToast(`שגיאת תקשורת: ${err.message}`, "alert");
   } finally {
+    if (streamElapsedTimer) {
+      clearInterval(streamElapsedTimer);
+      streamElapsedTimer = null;
+    }
+    activeStreamController = null;
     isStreaming = false;
     activeStreamingNode = null;
     activeStreamingDesc = "";
     els.sendBtn.disabled = false;
     if (els.artifactUpgraderSendBtn) els.artifactUpgraderSendBtn.disabled = false;
-    els.activeExecutionBar.classList.add("hidden");
+    if (els.qaUpgraderSendBtn) els.qaUpgraderSendBtn.disabled = false;
+    if (els.execSpinnerRing) els.execSpinnerRing.classList.add("hidden");
+    if (els.stopStreamBtn) els.stopStreamBtn.classList.add("hidden");
+
+    if (wasAborted) {
+      if (els.activeExecutionBar) {
+        els.activeExecutionBar.classList.remove("hidden", "tone-pass", "tone-escalate");
+        els.activeExecutionBar.classList.add("is-completed");
+      }
+      if (els.execNodeTitle) els.execNodeTitle.textContent = "הרצה הופסקה";
+      if (els.execStageText) els.execStageText.textContent = "בוטל";
+      if (els.execNodeDesc) els.execNodeDesc.textContent = "ההזרמה נעצרה בצד הלקוח";
+      if (els.execActionCta) els.execActionCta.classList.add("hidden");
+      if (els.execDismissBtn) els.execDismissBtn.classList.remove("hidden");
+    } else if (lastStreamCta) {
+      if (els.activeExecutionBar) {
+        els.activeExecutionBar.classList.remove("hidden", "tone-pass", "tone-escalate");
+        els.activeExecutionBar.classList.add("is-completed");
+        if (lastStreamCta.tone === "pass") els.activeExecutionBar.classList.add("tone-pass");
+        if (lastStreamCta.tone === "escalate") els.activeExecutionBar.classList.add("tone-escalate");
+      }
+      if (els.execNodeTitle) els.execNodeTitle.textContent = lastStreamCta.summaryTitle || "הושלם";
+      if (els.execStageText) els.execStageText.textContent = lastStreamCta.stageBadge || "הושלם";
+      if (els.execNodeDesc) els.execNodeDesc.textContent = lastStreamCta.summaryDesc || "";
+      if (els.execActionCta) {
+        els.execActionCta.textContent = lastStreamCta.label;
+        els.execActionCta.classList.remove("hidden");
+      }
+      if (els.execDismissBtn) els.execDismissBtn.classList.remove("hidden");
+    } else if (els.activeExecutionBar) {
+      els.activeExecutionBar.classList.add("hidden");
+    }
+
     if (currentSession) renderAll(currentSession);
     await refreshSessionSelector();
     if (activeWorkspaceView === "view-interview") {
@@ -1119,9 +1597,27 @@ function handleSSEBlock(block) {
   } else if (eventType === "node_start") {
     activeStreamingNode = payload.node;
     activeStreamingDesc = payload.description || "";
-    els.activeExecutionBar.classList.remove("hidden");
+    if (els.activeExecutionBar) {
+      els.activeExecutionBar.classList.remove("hidden", "is-completed", "tone-pass", "tone-escalate");
+    }
+    if (els.execSpinnerRing) els.execSpinnerRing.classList.remove("hidden");
+    if (els.stopStreamBtn) els.stopStreamBtn.classList.remove("hidden");
+    if (els.execActionCta) els.execActionCta.classList.add("hidden");
+    if (els.execDismissBtn) els.execDismissBtn.classList.add("hidden");
     els.execNodeTitle.textContent = payload.title;
-    els.execNodeDesc.textContent = payload.description;
+    if (els.execStageText) {
+      els.execStageText.textContent = getStageLabelForNode(payload.node, currentSession);
+    }
+    els.execNodeDesc.textContent = payload.model
+      ? `${payload.description} (${payload.model})`
+      : payload.description;
+    if (payload.model && payload.node) {
+      const tagEl = document.getElementById(`model-${payload.node}`);
+      if (tagEl) {
+        tagEl.textContent = formatModelBadgeText(payload);
+        tagEl.classList.remove("is-fallback");
+      }
+    }
     highlightActiveNode(payload.node, payload.description);
     if (currentSession) {
       renderPromptTab(currentSession);
@@ -1132,24 +1628,56 @@ function handleSSEBlock(block) {
     currentSession = payload.session;
     renderAll(currentSession);
     if (payload.node === "node_1_helper" && currentSession.raw_blueprint) {
-      switchTab("blueprintTab");
+      setNavNotification("view-artifacts", "info");
+      lastStreamCta = {
+        label: "צפה ב-XML Blueprint ←",
+        action: () => switchTab("blueprintTab"),
+        tone: "info",
+        stageBadge: "Blueprint מוכן",
+        summaryTitle: "תוכנית האב הופקה",
+        summaryDesc: "תוכנית ה-XML Blueprint מוכנה לצפייה",
+      };
     } else if (payload.node === "node_2_construct" || payload.node === "node_4_adjudicator") {
-      switchTab("promptTab");
+      setNavNotification("view-artifacts", "info");
+      lastStreamCta = {
+        label: "צפה בפרומפט ←",
+        action: () => switchTab("promptTab"),
+        tone: "info",
+        stageBadge: "פרומפט מעודכן",
+        summaryTitle: "הפרומפט עודכן",
+        summaryDesc: "התוצר הידר ומוכן לבדיקה במעבדת הפרומפט",
+      };
     }
   } else if (eventType === "done") {
     activeStreamingNode = null;
     currentSession = payload;
-    els.activeExecutionBar.classList.add("hidden");
     renderAll(currentSession);
     if (currentSession.status === "passed") {
-      switchTab("promptTab");
+      setNavNotification("view-artifacts", "pass");
+      lastStreamCta = {
+        label: "צפה בפרומפט המאושר ←",
+        action: () => switchTab("promptTab"),
+        tone: "pass",
+        stageBadge: "PASS",
+        summaryTitle: "הפרומפט אושר סופית",
+        summaryDesc: "בקרת האיכות הושלמה בהצלחה — ניתן לעבור לתוצר",
+      };
       showToast("הפרומפט אושר על ידי מבקר האיכות (PASS)", "check");
     } else if (currentSession.status === "escalated") {
-      switchWorkspaceView("view-qa");
+      setNavNotification("view-qa", "escalate");
+      lastStreamCta = {
+        label: "פתח מעבדת QA לתיקון ←",
+        action: () => switchWorkspaceView("view-qa"),
+        tone: "escalate",
+        stageBadge: "ESCALATE",
+        summaryTitle: "נדרשת הכוונה ידנית",
+        summaryDesc: "הופעל Circuit Breaker — צפה בממצאים ושלח תיקון ב-QA",
+      };
       showToast("נדרשת הכוונה ידנית (Circuit Breaker)", "alert");
     }
   } else if (eventType === "error") {
     activeStreamingNode = null;
+    lastStreamCta = null;
     els.activeExecutionBar.classList.add("hidden");
     if (payload.session) {
       currentSession = payload.session;
@@ -1167,12 +1695,15 @@ function renderAll(session) {
   if (session.session_id) {
     localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, session.session_id);
   }
+  updateActiveSessionPillLabel(session);
   const userTurns = (session.chat_history || []).filter((m) => m.role === "user").length;
   els.presetsContainer.classList.toggle("hidden", userTurns > 0);
+  if (els.chatMessages) els.chatMessages.classList.toggle("hidden", userTurns === 0);
+  if (els.chatCanvasScroll) els.chatCanvasScroll.classList.toggle("is-onboarding", userTurns === 0);
 
   renderPipelineStatus(session);
   renderReadinessPill(session);
-  renderChatHistory(session.chat_history || []);
+  renderChatHistory(session.chat_history || [], session);
   renderInputMode(session);
   renderPromptTab(session);
   renderBlueprintTab(session);
@@ -1185,8 +1716,9 @@ function renderReadinessPill(session) {
   const st = session.state || {};
   const readiness = session.readiness_scores || st.readiness_scores || {};
   const targetType = session.target_type || st.target_type;
+  const userTurns = (session.chat_history || []).filter((m) => m.role === "user").length;
 
-  if (!readiness.used_decision_model && !targetType) {
+  if (!readiness.used_decision_model && (userTurns === 0 || !targetType)) {
     els.readinessBarWrap.classList.add("hidden");
     return;
   }
@@ -1209,9 +1741,9 @@ function renderReadinessPill(session) {
 
   els.readinessBarWrap.classList.remove("hidden");
   els.readinessBarWrap.innerHTML = `
-    <span class="target-type-badge">${escapeHtml(targetType || "SYSTEM_PROMPT")}</span>
+    <span class="${getTargetBadgeClass(targetType)}">${escapeHtml(targetType || "SYSTEM_PROMPT")}</span>
     <span class="readiness-dim-dots">${dotsHtml}</span>
-    <span class="mono-text" style="font-size:0.72rem;">${escapeHtml(readyPct)}</span>
+    <span class="mono-text" style="font-size:0.75rem;">${escapeHtml(readyPct)}</span>
   `;
 }
 
@@ -1219,7 +1751,11 @@ function renderPipelineStatus(session) {
   const state = session.state || {};
   const iter = state.iteration_count || 0;
   const hasBlueprint = Boolean(session.raw_blueprint);
-  const hasPrompt = Boolean(session.clean_champion_prompt || session.clean_challenger_prompt);
+  const refFiles = session.reference_files || state.reference_files || {};
+  const hasPrompt = Boolean(
+    (session.clean_champion_prompt || session.clean_challenger_prompt || "").trim() ||
+      Object.keys(refFiles).length > 0
+  );
   const status = session.status;
 
   // Circuit breaker dots & counters
@@ -1238,17 +1774,21 @@ function renderPipelineStatus(session) {
     }
   });
 
-  // Header Telemetry Pill & Global status banner
+  // Header Telemetry Pill & Single-Source Status Indicator
   const activeNodeId = activeStreamingNode || session.active_node;
+  const statusTone =
+    activeNodeId || status === "compiling"
+      ? "active"
+      : status === "passed"
+      ? "passed"
+      : status === "escalated"
+      ? "escalated"
+      : "";
   if (els.telemetryLiveDot) {
-    els.telemetryLiveDot.className = "telemetry-live-dot";
-    if (activeNodeId || status === "compiling") {
-      els.telemetryLiveDot.classList.add("active");
-    } else if (status === "passed") {
-      els.telemetryLiveDot.classList.add("passed");
-    } else if (status === "escalated") {
-      els.telemetryLiveDot.classList.add("escalated");
-    }
+    els.telemetryLiveDot.className = statusTone ? `telemetry-live-dot ${statusTone}` : "telemetry-live-dot";
+  }
+  if (els.navStatusDot) {
+    els.navStatusDot.className = statusTone ? `nav-status-dot ${statusTone}` : "nav-status-dot";
   }
 
   if (els.headerActiveNodeText) {
@@ -1265,24 +1805,35 @@ function renderPipelineStatus(session) {
     }
   }
 
-  els.globalStageBadge.className = "stage-indicator";
-  if (status === "passed") {
-    els.globalStageBadge.classList.add("status-passed");
-    els.globalStageBadge.innerHTML = `אושר סופית (<code class="tech-token" dir="ltr">PASS</code>)`;
-    els.globalStageDesc.innerHTML = `הפרומפט עבר בקרת איכות ומוכן להטמעה. ניתן לשלוח הנחיות שדרוג נוספות.`;
-  } else if (status === "escalated") {
-    els.globalStageBadge.classList.add("status-escalated");
-    els.globalStageBadge.innerHTML = `הסלמה (<code class="tech-token" dir="ltr">ESCALATE</code>)`;
-    els.globalStageDesc.innerHTML = `מפסק הפחת הופעל. הזן הוראת תיקון ידנית עבור <code class="tech-token" dir="ltr">The Upgrader</code>.`;
-  } else if (status === "compiling") {
-    els.globalStageBadge.textContent = "הידור ובקרת איכות";
-    els.globalStageDesc.innerHTML = `הסוכנים מהדרים ובודקים את הפרומפט מול <code class="tech-token" dir="ltr">&lt;GEM_BLUEPRINT&gt;</code>...`;
-  } else if (status === "interviewing") {
-    els.globalStageBadge.innerHTML = `שלב הראיון (<code class="tech-token" dir="ltr">Phase 1</code>)`;
-    els.globalStageDesc.innerHTML = `<code class="tech-token" dir="ltr">The Helper</code> אוסף מידע לאפיון ה-<code class="tech-token" dir="ltr">XML Blueprint</code>`;
-  } else {
-    els.globalStageBadge.textContent = "מוכן להפעלה";
-    els.globalStageDesc.textContent = "תאר את הבוט הרצוי כדי להתחיל את תהליך הייצור";
+  if (els.globalStageBadge) {
+    els.globalStageBadge.className = "stage-indicator";
+    if (status === "passed") {
+      els.globalStageBadge.classList.add("status-passed");
+      els.globalStageBadge.innerHTML = `אושר סופית (<code class="tech-token" dir="ltr">PASS</code>)`;
+    } else if (status === "escalated") {
+      els.globalStageBadge.classList.add("status-escalated");
+      els.globalStageBadge.innerHTML = `הסלמה (<code class="tech-token" dir="ltr">ESCALATE</code>)`;
+    } else if (status === "compiling") {
+      els.globalStageBadge.textContent = "הידור ובקרת איכות";
+    } else if (status === "interviewing") {
+      els.globalStageBadge.innerHTML = `שלב הראיון (<code class="tech-token" dir="ltr">Phase 1</code>)`;
+    } else {
+      els.globalStageBadge.textContent = "מוכן להפעלה";
+    }
+  }
+
+  if (els.globalStageDesc) {
+    if (status === "passed") {
+      els.globalStageDesc.innerHTML = `הפרומפט עבר בקרת איכות ומוכן להטמעה. ניתן לשלוח הנחיות שדרוג נוספות.`;
+    } else if (status === "escalated") {
+      els.globalStageDesc.innerHTML = `מפסק הפחת הופעל. הזן הוראת תיקון ידנית עבור <code class="tech-token" dir="ltr">The Upgrader</code>.`;
+    } else if (status === "compiling") {
+      els.globalStageDesc.innerHTML = `הסוכנים מהדרים ובודקים את הפרומפט מול <code class="tech-token" dir="ltr">&lt;ARTIFACT_BLUEPRINT&gt;</code>...`;
+    } else if (status === "interviewing") {
+      els.globalStageDesc.innerHTML = `<code class="tech-token" dir="ltr">The Helper</code> אוסף מידע לאפיון תוכנית האב`;
+    } else {
+      els.globalStageDesc.textContent = "ממתין לתיאור הסוכן הראשוני מהמשתמש";
+    }
   }
 
   // Update visual graph nodes in view-pipeline
@@ -1340,6 +1891,7 @@ function renderPipelineStatus(session) {
 
     el.title = `${NODE_ROLES[nid]} (${badge.textContent})`;
   });
+  renderNodeModelTags(session);
 }
 
 function highlightActiveNode(nodeId, description) {
@@ -1348,6 +1900,9 @@ function highlightActiveNode(nodeId, description) {
   }
   if (els.telemetryLiveDot) {
     els.telemetryLiveDot.className = "telemetry-live-dot active";
+  }
+  if (els.navStatusDot) {
+    els.navStatusDot.className = "nav-status-dot active";
   }
 
   const nodes = ["node_1_helper", "node_2_construct", "node_3_upgrader", "node_4_adjudicator"];
@@ -1363,7 +1918,7 @@ function highlightActiveNode(nodeId, description) {
       el.classList.remove("active");
     }
   });
-  els.globalStageDesc.textContent = description;
+  if (els.globalStageDesc) els.globalStageDesc.textContent = description;
 }
 
 function renderInputMode(session) {
@@ -1389,9 +1944,23 @@ function renderInputMode(session) {
   }
 }
 
-function renderChatHistory(history) {
+function renderChatHistory(history, session = currentSession) {
   els.chatMessages.innerHTML = "";
-  history.forEach((msg) => {
+  const userTurns = (history || []).filter((m) => m.role === "user").length;
+  if (userTurns === 0) {
+    els.chatMessages.classList.add("hidden");
+    return;
+  }
+  els.chatMessages.classList.remove("hidden");
+  let lastAssistantIdx = -1;
+  for (let idx = history.length - 1; idx >= 0; idx--) {
+    if (history[idx]?.role !== "user") {
+      lastAssistantIdx = idx;
+      break;
+    }
+  }
+
+  history.forEach((msg, idx) => {
     const bubble = document.createElement("div");
     bubble.className = `chat-bubble ${msg.role}`;
     if (msg.is_override) bubble.classList.add("override-bubble");
@@ -1439,6 +2008,38 @@ function renderChatHistory(history) {
       bubble.appendChild(details);
     }
 
+    if (idx === lastAssistantIdx && session) {
+      const st = session.state || {};
+      const refFiles = session.reference_files || st.reference_files || {};
+      const hasPrompt = Boolean((getBestPrompt(session) || "").trim() || Object.keys(refFiles).length > 0);
+      let ctaLabel = "";
+      let ctaHandler = null;
+      if (session.status === "passed") {
+        ctaLabel = "צפה בפרומפט המאושר ←";
+        ctaHandler = () => switchTab("promptTab");
+      } else if (session.status === "escalated") {
+        ctaLabel = "פתח מעבדת QA לתיקון ←";
+        ctaHandler = () => switchWorkspaceView("view-qa");
+      } else if (hasPrompt) {
+        ctaLabel = "צפה בפרומפט ←";
+        ctaHandler = () => switchTab("promptTab");
+      } else if (session.raw_blueprint) {
+        ctaLabel = "צפה ב-XML Blueprint ←";
+        ctaHandler = () => switchTab("blueprintTab");
+      }
+      if (ctaLabel && ctaHandler) {
+        const actionRow = document.createElement("div");
+        actionRow.className = "bubble-action-row";
+        const ctaBtn = document.createElement("button");
+        ctaBtn.type = "button";
+        ctaBtn.className = "btn btn-secondary btn-sm bubble-action-cta";
+        ctaBtn.textContent = ctaLabel;
+        ctaBtn.addEventListener("click", ctaHandler);
+        actionRow.appendChild(ctaBtn);
+        bubble.appendChild(actionRow);
+      }
+    }
+
     els.chatMessages.appendChild(bubble);
   });
 
@@ -1469,9 +2070,10 @@ function getBestPrompt(session) {
 
 function getActiveArtifactContent(session) {
   if (!session) return "";
+  const resolvedFile = resolveActiveArtifactFile(session);
   const refFiles = session.reference_files || session.state?.reference_files || {};
-  if (activeArtifactFile !== "__primary__" && refFiles[activeArtifactFile] !== undefined) {
-    return refFiles[activeArtifactFile];
+  if (resolvedFile !== "__primary__" && refFiles[resolvedFile] !== undefined) {
+    return refFiles[resolvedFile];
   }
   return getBestPrompt(session);
 }
@@ -1494,12 +2096,121 @@ function buildSkeletonHTML(agentLabel, actionDesc) {
   `;
 }
 
+function renderGroupedSuiteFileTree(container, session, targetType, refFiles, hasPrimaryText) {
+  const refKeys = Object.keys(refFiles);
+  const skillGroups = new Map();
+  const rootExtraKeys = [];
+
+  refKeys.forEach((relPath) => {
+    const match = relPath.match(/^skills\/([^/]+)\/(.+)$/);
+    if (match) {
+      const subSlug = match[1];
+      if (!skillGroups.has(subSlug)) skillGroups.set(subSlug, []);
+      skillGroups.get(subSlug).push(relPath);
+    } else {
+      rootExtraKeys.push(relPath);
+    }
+  });
+
+  container.classList.add("is-grouped-tree");
+  container.innerHTML = "";
+
+  const header = document.createElement("div");
+  header.className = "suite-tree-header";
+  header.innerHTML = `<span>SKILL_SUITE TREE · ${skillGroups.size} skills · ${refKeys.length} files</span><span>Pick &amp; Mix Ready</span>`;
+  container.appendChild(header);
+
+  const showPrimaryPill = hasPrimaryText && (targetType !== "SKILL_SUITE" || getBestPrompt(session).trim().length >= 80);
+  if (showPrimaryPill || rootExtraKeys.length > 0) {
+    const rootRow = document.createElement("div");
+    rootRow.className = "suite-root-files";
+    if (showPrimaryPill) {
+      const primaryBtn = document.createElement("button");
+      primaryBtn.type = "button";
+      primaryBtn.className = `file-tab-btn ${activeArtifactFile === "__primary__" ? "active" : ""}`;
+      primaryBtn.textContent = targetType === "HYBRID_BUNDLE" ? "Primary Bundle" : "Overview";
+      primaryBtn.addEventListener("click", () => {
+        activeArtifactFile = "__primary__";
+        renderPromptTab(currentSession);
+      });
+      rootRow.appendChild(primaryBtn);
+    }
+    rootExtraKeys.forEach((relPath) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `file-tab-btn ${activeArtifactFile === relPath ? "active" : ""}`;
+      btn.textContent = relPath;
+      btn.addEventListener("click", () => {
+        activeArtifactFile = relPath;
+        renderPromptTab(currentSession);
+      });
+      rootRow.appendChild(btn);
+    });
+    container.appendChild(rootRow);
+  }
+
+  skillGroups.forEach((groupFiles, subSlug) => {
+    const sorted = groupFiles.slice().sort((a, b) => {
+      const aIsRoot = a.endsWith("/SKILL.md");
+      const bIsRoot = b.endsWith("/SKILL.md");
+      if (aIsRoot !== bIsRoot) return aIsRoot ? -1 : 1;
+      return a.localeCompare(b);
+    });
+
+    const details = document.createElement("details");
+    details.className = "suite-folder-group";
+    const containsActive = sorted.includes(activeArtifactFile);
+    details.open = containsActive || !collapsedSuiteFolders.has(subSlug);
+    details.addEventListener("toggle", () => {
+      if (details.open) collapsedSuiteFolders.delete(subSlug);
+      else collapsedSuiteFolders.add(subSlug);
+    });
+
+    const summary = document.createElement("summary");
+    summary.className = "suite-folder-summary";
+    summary.innerHTML = `
+      <span class="suite-folder-summary-left">
+        <span class="suite-folder-chevron">${ICONS.chevronDown}</span>
+        <span class="suite-folder-icon">${ICONS.folder}</span>
+        <span>skills/${escapeHtml(subSlug)}/</span>
+      </span>
+      <span class="suite-folder-count">${sorted.length}</span>
+    `;
+    details.appendChild(summary);
+
+    const childrenWrap = document.createElement("div");
+    childrenWrap.className = "suite-folder-children";
+    sorted.forEach((relPath) => {
+      const subPath = relPath.slice(`skills/${subSlug}/`.length);
+      const isMainSkill = subPath === "SKILL.md";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `suite-file-item ${isMainSkill ? "" : "is-ref-child"} ${activeArtifactFile === relPath ? "active" : ""}`;
+      const roleLabel = isMainSkill ? "SKILL" : subPath.startsWith("references/") ? "REF" : "FILE";
+      btn.innerHTML = `<span>${escapeHtml(subPath)}</span><span class="suite-file-role-tag">${roleLabel}</span>`;
+      btn.addEventListener("click", () => {
+        activeArtifactFile = relPath;
+        renderPromptTab(currentSession);
+      });
+      childrenWrap.appendChild(btn);
+    });
+    details.appendChild(childrenWrap);
+    container.appendChild(details);
+  });
+}
+
 function renderPromptTab(session) {
   const promptText = getBestPrompt(session);
   const state = session.state || {};
   const targetType = session.target_type || state.target_type || "SYSTEM_PROMPT";
   const slugName = session.slug_name || state.slug_name || "";
   const refFiles = session.reference_files || state.reference_files || {};
+  const refKeys = Object.keys(refFiles);
+  const hasPrimaryText = Boolean(promptText.trim());
+  const hasAnyArtifact = hasPrimaryText || refKeys.length > 0;
+  if (els.artifactUpgraderForm) {
+    els.artifactUpgraderForm.classList.toggle("hidden", !hasAnyArtifact);
+  }
   const activeNode = activeStreamingNode || session.active_node;
   const isPromptCompiling =
     activeNode === "node_2_construct" ||
@@ -1508,8 +2219,9 @@ function renderPromptTab(session) {
     session.status === "compiling";
 
   if (els.artifactTargetTypeBadge) {
+    els.artifactTargetTypeBadge.className = getTargetBadgeClass(targetType);
     els.artifactTargetTypeBadge.textContent = targetType;
-    els.artifactTargetTypeBadge.classList.toggle("hidden", !promptText && !slugName);
+    els.artifactTargetTypeBadge.classList.toggle("hidden", !hasAnyArtifact && !slugName);
   }
   if (els.artifactSlugBadge) {
     const codeEl = els.artifactSlugBadge.querySelector("code");
@@ -1517,13 +2229,16 @@ function renderPromptTab(session) {
     els.artifactSlugBadge.classList.toggle("hidden", !slugName);
   }
 
-  if (!promptText) {
+  if (!hasAnyArtifact) {
     els.promptEmptyState.classList.remove("hidden");
     els.promptDisplayContainer.classList.add("hidden");
     els.copyPromptBtn.disabled = true;
     els.downloadPromptBtn.disabled = true;
     if (els.downloadZipBtn) els.downloadZipBtn.disabled = true;
-    if (els.artifactFileSwitcher) els.artifactFileSwitcher.classList.add("hidden");
+    if (els.artifactFileSwitcher) {
+      els.artifactFileSwitcher.classList.add("hidden");
+      els.artifactFileSwitcher.classList.remove("is-grouped-tree");
+    }
     els.promptStatsText.textContent = "0 תווים · ~0 טוקנים";
 
     if (isPromptCompiling) {
@@ -1559,46 +2274,51 @@ function renderPromptTab(session) {
   els.downloadPromptBtn.disabled = false;
   if (els.downloadZipBtn) els.downloadZipBtn.disabled = false;
 
-  // Multi-file switcher bar
-  const refKeys = Object.keys(refFiles);
-  if (activeArtifactFile !== "__primary__" && refFiles[activeArtifactFile] === undefined) {
-    activeArtifactFile = "__primary__";
-  }
+  resolveActiveArtifactFile(session);
 
   if (els.artifactFileSwitcher) {
     if (refKeys.length > 0) {
       els.artifactFileSwitcher.classList.remove("hidden");
-      const primaryLabel =
-        targetType === "SKILL_PACKAGE"
-          ? "SKILL.md"
-          : targetType === "HYBRID_BUNDLE"
-          ? "Primary Bundle"
-          : "SYSTEM_PROMPT.md";
-      els.artifactFileSwitcher.innerHTML = "";
+      const hasNestedSkills = refKeys.some((k) => /^skills\/[^/]+\/.+/.test(k));
+      if (hasNestedSkills) {
+        renderGroupedSuiteFileTree(els.artifactFileSwitcher, session, targetType, refFiles, hasPrimaryText);
+      } else {
+        els.artifactFileSwitcher.classList.remove("is-grouped-tree");
+        const primaryLabel =
+          targetType === "SKILL_PACKAGE"
+            ? "SKILL.md"
+            : targetType === "HYBRID_BUNDLE"
+            ? "Primary Bundle"
+            : "SYSTEM_PROMPT.md";
+        els.artifactFileSwitcher.innerHTML = "";
 
-      const primaryBtn = document.createElement("button");
-      primaryBtn.type = "button";
-      primaryBtn.className = `file-tab-btn ${activeArtifactFile === "__primary__" ? "active" : ""}`;
-      primaryBtn.textContent = primaryLabel;
-      primaryBtn.addEventListener("click", () => {
-        activeArtifactFile = "__primary__";
-        renderPromptTab(currentSession);
-      });
-      els.artifactFileSwitcher.appendChild(primaryBtn);
+        if (hasPrimaryText || targetType !== "SKILL_SUITE") {
+          const primaryBtn = document.createElement("button");
+          primaryBtn.type = "button";
+          primaryBtn.className = `file-tab-btn ${activeArtifactFile === "__primary__" ? "active" : ""}`;
+          primaryBtn.textContent = primaryLabel;
+          primaryBtn.addEventListener("click", () => {
+            activeArtifactFile = "__primary__";
+            renderPromptTab(currentSession);
+          });
+          els.artifactFileSwitcher.appendChild(primaryBtn);
+        }
 
-      refKeys.forEach((relPath) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = `file-tab-btn ${activeArtifactFile === relPath ? "active" : ""}`;
-        btn.textContent = relPath;
-        btn.addEventListener("click", () => {
-          activeArtifactFile = relPath;
-          renderPromptTab(currentSession);
+        refKeys.forEach((relPath) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = `file-tab-btn ${activeArtifactFile === relPath ? "active" : ""}`;
+          btn.textContent = relPath;
+          btn.addEventListener("click", () => {
+            activeArtifactFile = relPath;
+            renderPromptTab(currentSession);
+          });
+          els.artifactFileSwitcher.appendChild(btn);
         });
-        els.artifactFileSwitcher.appendChild(btn);
-      });
+      }
     } else {
       els.artifactFileSwitcher.classList.add("hidden");
+      els.artifactFileSwitcher.classList.remove("is-grouped-tree");
     }
   }
 
@@ -1668,44 +2388,94 @@ function renderBlueprintTab(session) {
     parsed.target_type || parsed.role_title || parsed.description_and_triggers || parsed.core_workflow
   );
 
-  const cardDefs = isV2
-    ? [
-        { key: "target_type", icon: ICONS.layers, label: "Target Type (סוג תוצר)", full: false },
-        { key: "slug_name", icon: ICONS.cpu, label: "Slug Name (מזהה חבילה)", full: false },
-        { key: "role_title", icon: ICONS.target, label: "Role Title (פרסונה ותפקיד)", full: false },
-        { key: "tone_and_language", icon: ICONS.mic, label: "Tone & Language (טון ושפה)", full: false },
-        { key: "epistemic_stance", icon: ICONS.sliders, label: "Epistemic Stance (עמדה אפיסטמית)", full: true },
-        { key: "description_and_triggers", icon: ICONS.zap, label: "Description & Triggers (טריגרי הפעלה)", full: true },
-        { key: "negative_triggers", icon: ICONS.ban, label: "Negative Triggers (מתי לא להפעיל)", full: true },
-        { key: "clarification_gate", icon: ICONS.shield, label: "Clarification Gate (שער הבהרות)", full: true },
-        { key: "core_workflow", icon: ICONS.workflow, label: "Core Workflow (תהליך ביצוע)", full: true },
-        { key: "progressive_disclosure_refs", icon: ICONS.layers, label: "Progressive Disclosure Refs (קבצי עזר)", full: false },
-        { key: "verification_rubric", icon: ICONS.check, label: "Verification Rubric (אימות פנימי)", full: false },
-        { key: "format_spec", icon: ICONS.fileText, label: "Format Spec (מפרט פלט)", full: true },
-        { key: "guardrails", icon: ICONS.alert, label: "Guardrails (שומרי סף)", full: true },
-      ]
-    : [
-        { key: "title", icon: ICONS.target, label: "Title (פרסונה ותפקיד)", full: false },
-        { key: "tone", icon: ICONS.mic, label: "Tone (סגנון דיבור)", full: false },
-        { key: "domain_expertise", icon: ICONS.cpu, label: "Domain Expertise (תחומי מומחיות)", full: false },
-        { key: "cognitive_modules", icon: ICONS.sliders, label: "Cognitive Modules (מודולים קוגניטיביים)", full: false },
-        { key: "workflow", icon: ICONS.workflow, label: "Workflow (תהליך עבודה מובנה)", full: true },
-        { key: "negative_constraints", icon: ICONS.ban, label: "Negative Constraints (איסורים ומגבלות)", full: true },
-        { key: "output_format", icon: ICONS.fileText, label: "Output Format (תבנית פלט)", full: true },
-      ];
-
-  els.bpCardsGrid.innerHTML = "";
-  cardDefs.forEach((def) => {
-    if (!parsed[def.key]) return;
+  const buildBpCard = (def) => {
     const card = document.createElement("div");
     card.className = `bp-card ${def.full ? "full-width" : ""}`;
-    card.dir = "ltr";
     card.innerHTML = `
       <div class="bp-card-label">${def.icon} <span>${escapeHtml(def.label)}</span></div>
-      <div class="bp-card-value">${escapeHtml(parsed[def.key])}</div>
+      <div class="bp-card-value" dir="auto">${renderStructuredMarkdown(parsed[def.key])}</div>
     `;
-    els.bpCardsGrid.appendChild(card);
-  });
+    return card;
+  };
+
+  els.bpCardsGrid.innerHTML = "";
+  if (isV2) {
+    const v2Clusters = [
+      {
+        title: "1. Identity & Epistemic Stance",
+        defs: [
+          { key: "target_type", icon: ICONS.layers, label: "Target Type (סוג תוצר)", full: false },
+          { key: "slug_name", icon: ICONS.cpu, label: "Slug Name (מזהה חבילה)", full: false },
+          { key: "role_title", icon: ICONS.target, label: "Role Title (פרסונה ותפקיד)", full: false },
+          { key: "tone_and_language", icon: ICONS.mic, label: "Tone & Language (טון ושפה)", full: false },
+          { key: "epistemic_stance", icon: ICONS.sliders, label: "Epistemic Stance (עמדה אפיסטמית)", full: true },
+        ],
+      },
+      {
+        title: "2. Routing & Clarification",
+        defs: [
+          { key: "description_and_triggers", icon: ICONS.zap, label: "Description & Triggers (טריגרי הפעלה)", full: true },
+          { key: "negative_triggers", icon: ICONS.ban, label: "Negative Triggers (מתי לא להפעיל)", full: true },
+          { key: "suite_topology", icon: ICONS.layers, label: "Suite Topology (מפת הסקילים בחבילה)", full: true },
+          { key: "clarification_gate", icon: ICONS.shield, label: "Clarification Gate (שער הבהרות)", full: true },
+        ],
+      },
+      {
+        title: "3. Execution & Verification",
+        defs: [
+          { key: "core_workflow", icon: ICONS.workflow, label: "Core Workflow (תהליך ביצוע)", full: true },
+          { key: "progressive_disclosure_refs", icon: ICONS.layers, label: "Progressive Disclosure Refs (קבצי עזר)", full: false },
+          { key: "verification_rubric", icon: ICONS.check, label: "Verification Rubric (אימות פנימי)", full: false },
+          { key: "format_spec", icon: ICONS.fileText, label: "Format Spec (מפרט פלט)", full: true },
+          { key: "guardrails", icon: ICONS.alert, label: "Guardrails (שומרי סף)", full: true },
+        ],
+      },
+    ];
+
+    const clusteredKeys = new Set(["version"]);
+    v2Clusters.forEach((cluster) => {
+      const visibleDefs = cluster.defs.filter((def) => {
+        clusteredKeys.add(def.key);
+        return Boolean(parsed[def.key]);
+      });
+      if (visibleDefs.length === 0) return;
+
+      const section = document.createElement("div");
+      section.className = "bp-cluster-section";
+      section.innerHTML = `
+        <div class="bp-cluster-header">
+          <span class="bp-cluster-title" dir="ltr">${escapeHtml(cluster.title)}</span>
+        </div>
+      `;
+      const grid = document.createElement("div");
+      grid.className = "bp-cluster-grid";
+      visibleDefs.forEach((def) => grid.appendChild(buildBpCard(def)));
+      section.appendChild(grid);
+      els.bpCardsGrid.appendChild(section);
+    });
+
+    // Fallback for any non-empty legacy/custom fields outside the 3 V2 clusters
+    Object.keys(parsed).forEach((key) => {
+      if (clusteredKeys.has(key) || !parsed[key]) return;
+      els.bpCardsGrid.appendChild(
+        buildBpCard({ key, icon: ICONS.fileText, label: key, full: true })
+      );
+    });
+  } else {
+    const v1Defs = [
+      { key: "title", icon: ICONS.target, label: "Title (פרסונה ותפקיד)", full: false },
+      { key: "tone", icon: ICONS.mic, label: "Tone (סגנון דיבור)", full: false },
+      { key: "domain_expertise", icon: ICONS.cpu, label: "Domain Expertise (תחומי מומחיות)", full: false },
+      { key: "cognitive_modules", icon: ICONS.sliders, label: "Cognitive Modules (מודולים קוגניטיביים)", full: false },
+      { key: "workflow", icon: ICONS.workflow, label: "Workflow (תהליך עבודה מובנה)", full: true },
+      { key: "negative_constraints", icon: ICONS.ban, label: "Negative Constraints (איסורים ומגבלות)", full: true },
+      { key: "output_format", icon: ICONS.fileText, label: "Output Format (תבנית פלט)", full: true },
+    ];
+    v1Defs.forEach((def) => {
+      if (!parsed[def.key]) return;
+      els.bpCardsGrid.appendChild(buildBpCard(def));
+    });
+  }
 
   els.xmlRawViewer.textContent = rawXml;
 }
@@ -1726,6 +2496,16 @@ function renderDecisionRubricCard(session) {
     { key: "actionable_clarity", label: "Actionable Clarity" },
     { key: "output_contract_strength", label: "Output Contract" },
   ];
+  if (
+    scores.trigger_deconfliction !== undefined &&
+    scores.trigger_deconfliction !== null
+  ) {
+    dims.push({
+      key: "trigger_deconfliction",
+      label: "Trigger De-confliction",
+      isSuiteDim: true,
+    });
+  }
 
   const avgPct = Math.round(Number(scores.weighted_average || 0) * 100);
   const avgClass = avgPct >= 88 ? "badge-success" : avgPct >= 70 ? "badge-warning" : "badge-neutral";
@@ -1742,10 +2522,12 @@ function renderDecisionRubricCard(session) {
       const val = Number(scores[d.key] || 0);
       const pct = Math.max(0, Math.min(100, Math.round((val / 5.0) * 100)));
       const fillCls = val >= 4.0 ? "high" : val >= 3.0 ? "warn" : "low";
+      const rowCls = d.isSuiteDim ? "rubric-dim-row suite-dim-row" : "rubric-dim-row";
+      const suiteTag = d.isSuiteDim ? `<span class="rubric-suite-tag">SKILL_SUITE</span>` : "";
       return `
-        <div class="rubric-dim-row" dir="ltr">
+        <div class="${rowCls}" dir="ltr">
           <div class="rubric-dim-top">
-            <span class="rubric-dim-name">${escapeHtml(d.label)}</span>
+            <span class="rubric-dim-name">${escapeHtml(d.label)}${suiteTag}</span>
             <span class="rubric-dim-score">${val.toFixed(1)} / 5</span>
           </div>
           <div class="rubric-progress-track">
@@ -1776,6 +2558,10 @@ function renderQATab(session) {
   const state = session.state || {};
   const logs = state.error_log || [];
   els.qaCountPill.textContent = String(logs.length);
+  if (els.qaUpgraderForm) {
+    const canUpgradeFromQa = session.status === "escalated" || (state.iteration_count || 0) > 0;
+    els.qaUpgraderForm.classList.toggle("hidden", !canUpgradeFromQa);
+  }
   renderDecisionRubricCard(session);
 
   if (logs.length === 0) {
@@ -1798,7 +2584,7 @@ function renderQATab(session) {
     else if (entry.includes("[FAIL]")) cls += " fail";
     else if (entry.includes("[ESCALATE]")) cls += " escalate";
     item.className = cls;
-    item.dir = "ltr";
+    item.dir = "auto";
     item.innerHTML = `<strong>#${idx + 1}</strong> — ${escapeHtml(entry)}`;
     els.qaLogsList.appendChild(item);
   });
@@ -1877,21 +2663,58 @@ function computeLineDiff(oldText, newText) {
 
 function renderUnifiedDiff(championText, challengerText) {
   if (!els.diffUnifiedPre) return;
-  const base = championText || challengerText || "";
-  const target = challengerText || championText || "";
-  const ops = computeLineDiff(base, target);
+  const champ = championText || "";
+  const chall = challengerText || "";
+  const isSame = Boolean(champ && chall && champ.trim() === chall.trim());
+  const isMissingOne = !champ || !chall;
+
+  if (isSame || isMissingOne) {
+    if (els.diffZeroChangesBanner) {
+      els.diffZeroChangesBanner.textContent = isSame
+        ? "0 הבדלים — גרסת ה-Challenger אושרה והפכה ל-Champion הנוכחי"
+        : "קיימת גרסה יחידה בלבד — עבור לתצוגת Side-by-Side או בצע שדרוג נוסף להשוואה";
+      els.diffZeroChangesBanner.classList.remove("hidden");
+    }
+    if (els.diffStatsBadge) {
+      els.diffStatsBadge.innerHTML = `<span class="diff-add-count">+0</span><span>/</span><span class="diff-del-count">-0</span>`;
+      els.diffStatsBadge.classList.remove("hidden");
+    }
+    els.diffUnifiedPre.classList.add("hidden");
+    els.diffUnifiedPre.innerHTML = "";
+    return;
+  }
+
+  if (els.diffZeroChangesBanner) els.diffZeroChangesBanner.classList.add("hidden");
+  els.diffUnifiedPre.classList.remove("hidden");
+
+  const ops = computeLineDiff(champ, chall);
+  let oldLn = 1;
+  let newLn = 1;
+  let addCount = 0;
+  let delCount = 0;
 
   els.diffUnifiedPre.innerHTML = ops
     .map((op) => {
       if (op.type === "add") {
-        return `<span class="diff-line diff-add">+ ${escapeHtml(op.text)}</span>`;
+        addCount++;
+        const lnLabel = String(newLn++);
+        return `<span class="diff-line diff-add"><span class="diff-ln">${lnLabel}</span><span class="diff-code">+ ${escapeHtml(op.text)}</span></span>`;
       }
       if (op.type === "del") {
-        return `<span class="diff-line diff-del">- ${escapeHtml(op.text)}</span>`;
+        delCount++;
+        const lnLabel = String(oldLn++);
+        return `<span class="diff-line diff-del"><span class="diff-ln">${lnLabel}</span><span class="diff-code">- ${escapeHtml(op.text)}</span></span>`;
       }
-      return `<span class="diff-line diff-ctx">  ${escapeHtml(op.text)}</span>`;
+      const lnLabel = String(newLn++);
+      oldLn++;
+      return `<span class="diff-line diff-ctx"><span class="diff-ln">${lnLabel}</span><span class="diff-code">  ${escapeHtml(op.text)}</span></span>`;
     })
     .join("");
+
+  if (els.diffStatsBadge) {
+    els.diffStatsBadge.innerHTML = `<span class="diff-add-count">+${addCount}</span><span>/</span><span class="diff-del-count">-${delCount}</span>`;
+    els.diffStatsBadge.classList.remove("hidden");
+  }
 }
 
 function renderTimelineTab(timeline) {
@@ -1903,27 +2726,49 @@ function renderTimelineTab(timeline) {
   const reversed = (timeline || []).slice().reverse();
   const filtered = timelineFilterQuery
     ? reversed.filter((item) => {
-        const hay = `${item.title || ""} ${item.detail || ""} ${item.timestamp || ""}`.toLowerCase();
+        const hay = `${item.title || ""} ${item.detail || ""} ${item.timestamp || ""} ${item.model || ""}`.toLowerCase();
         return hay.includes(timelineFilterQuery);
       })
     : reversed;
 
   if (filtered.length === 0) {
     els.timelineList.innerHTML = `
-      <div class="empty-state" style="min-height:140px;padding:16px;">
-        <p>${timelineFilterQuery ? "לא נמצאו אירועים התואמים לחיפוש." : "טרם נרשמו אירועים ביומן הסשן."}</p>
+      <div class="empty-state" style="min-height:140px;padding:16px;gap:10px;">
+        <p>${
+          timelineFilterQuery
+            ? `לא נמצאו אירועים עבור "${escapeHtml(timelineFilterQuery)}".`
+            : "טרם נרשמו אירועים ביומן הסשן."
+        }</p>
+        ${
+          timelineFilterQuery
+            ? `<button type="button" class="btn btn-secondary btn-sm timeline-clear-filter-btn">נקה סינון וחיפוש</button>`
+            : ""
+        }
       </div>
     `;
+    const clearTimelineBtn = els.timelineList.querySelector(".timeline-clear-filter-btn");
+    if (clearTimelineBtn) {
+      clearTimelineBtn.addEventListener("click", () => {
+        timelineFilterQuery = "";
+        if (els.timelineSearchInput) els.timelineSearchInput.value = "";
+        renderTimelineTab(timeline);
+      });
+    }
     return;
   }
 
   filtered.forEach((item) => {
     const row = document.createElement("div");
     row.className = "timeline-item";
+    const modelBadge = item.model
+      ? `<span class="tl-model-badge ${item.fallback_used ? "is-fallback" : ""}" dir="ltr">${escapeHtml(
+          formatModelBadgeText(item)
+        )}</span>`
+      : "";
     row.innerHTML = `
       <div class="tl-time">${escapeHtml(item.timestamp || "")}</div>
       <div class="tl-body">
-        <div class="tl-title">${formatSimpleMarkdown(item.title || "")}</div>
+        <div class="tl-title">${formatSimpleMarkdown(item.title || "")}${modelBadge}</div>
         <div class="tl-detail">${formatSimpleMarkdown(item.detail || "")}</div>
       </div>
     `;
@@ -1961,7 +2806,7 @@ function wrapBiDiTechTokens(safeHtml) {
   );
   BI_DI_TECH_TERMS.forEach((term) => {
     const reg = new RegExp(`\\b(${term})\\b`, "g");
-    out = out.replace(reg, '<code class="tech-token" dir="ltr">$1</code>');
+    out = out.replace(reg, '<bdi dir="ltr" class="bidi-term">$1</bdi>');
   });
   return out;
 }
@@ -2019,32 +2864,34 @@ function renderStructuredMarkdown(markdownText) {
     const trimmed = rawLine.trim();
     if (/^###\s+/.test(trimmed)) {
       closeList();
-      out.push(`<h3>${formatSimpleMarkdown(trimmed.replace(/^###\s+/, ""))}</h3>`);
+      out.push(`<h3 dir="auto">${formatSimpleMarkdown(trimmed.replace(/^###\s+/, ""))}</h3>`);
     } else if (/^##\s+/.test(trimmed)) {
       closeList();
-      out.push(`<h2>${formatSimpleMarkdown(trimmed.replace(/^##\s+/, ""))}</h2>`);
+      out.push(`<h2 dir="auto">${formatSimpleMarkdown(trimmed.replace(/^##\s+/, ""))}</h2>`);
     } else if (/^#\s+/.test(trimmed)) {
       closeList();
-      out.push(`<h1>${formatSimpleMarkdown(trimmed.replace(/^#\s+/, ""))}</h1>`);
+      out.push(`<h1 dir="auto">${formatSimpleMarkdown(trimmed.replace(/^#\s+/, ""))}</h1>`);
     } else if (/^[-*]\s+/.test(trimmed)) {
       if (!inList || listTag !== "ul") {
         closeList();
         listTag = "ul";
-        out.push("<ul>");
+        out.push('<ul dir="auto">');
         inList = true;
       }
-      out.push(`<li>${formatSimpleMarkdown(trimmed.replace(/^[-*]\s+/, ""))}</li>`);
+      out.push(`<li dir="auto">${formatSimpleMarkdown(trimmed.replace(/^[-*]\s+/, ""))}</li>`);
     } else if (/^\d+\.\s+/.test(trimmed)) {
       if (!inList || listTag !== "ol") {
         closeList();
         listTag = "ol";
-        out.push("<ol>");
+        out.push('<ol dir="auto">');
         inList = true;
       }
-      out.push(`<li>${formatSimpleMarkdown(trimmed.replace(/^\d+\.\s+/, ""))}</li>`);
+      out.push(`<li dir="auto">${formatSimpleMarkdown(trimmed.replace(/^\d+\.\s+/, ""))}</li>`);
     } else {
       closeList();
-      out.push(formatSimpleMarkdown(rawLine));
+      if (trimmed) {
+        out.push(`<p dir="auto">${formatSimpleMarkdown(rawLine)}</p>`);
+      }
     }
   }
 
@@ -2053,18 +2900,58 @@ function renderStructuredMarkdown(markdownText) {
     out.push(`<pre dir="ltr"><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
   }
 
-  return out.join("\n");
+  return out.join("");
+}
+
+function autoResizeTextarea(el, minHeight = 56, maxHeight = 180) {
+  if (!el) return;
+  el.style.height = "auto";
+  const nextHeight = Math.max(minHeight, Math.min(el.scrollHeight, maxHeight));
+  el.style.height = `${nextHeight}px`;
+}
+
+function resetTextareaHeight(el, minHeight = 56) {
+  if (!el) return;
+  el.style.height = `${minHeight}px`;
 }
 
 let toastTimer = null;
-function showToast(msg, iconKey = "check") {
-  const iconSvg = ICONS[iconKey] || ICONS.check;
-  els.toast.innerHTML = `${iconSvg} <span>${escapeHtml(msg)}</span>`;
-  els.toast.classList.remove("hidden");
+let toastDuration = 3400;
+let toastHoverBound = false;
+
+function scheduleToastHide(delayMs) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
-    els.toast.classList.add("hidden");
-  }, 3400);
+    if (els.toast) {
+      els.toast.classList.add("hidden");
+      els.toast.classList.remove("toast-error");
+    }
+  }, delayMs);
+}
+
+function showToast(msg, iconKey = "check") {
+  if (!els.toast) return;
+  if (!toastHoverBound) {
+    toastHoverBound = true;
+    els.toast.addEventListener("mouseenter", () => {
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+        toastTimer = null;
+      }
+    });
+    els.toast.addEventListener("mouseleave", () => {
+      if (!els.toast.classList.contains("hidden")) {
+        scheduleToastHide(2000);
+      }
+    });
+  }
+  const iconSvg = ICONS[iconKey] || ICONS.check;
+  const isError = iconKey === "alert";
+  toastDuration = isError ? 6000 : 3400;
+  els.toast.classList.toggle("toast-error", isError);
+  els.toast.innerHTML = `${iconSvg} <span>${escapeHtml(msg)}</span>`;
+  els.toast.classList.remove("hidden");
+  scheduleToastHide(toastDuration);
 }
 
 // =========================================================
@@ -2106,6 +2993,36 @@ async function refreshBettyHistory() {
   }
 }
 
+const BETTY_DOCKED_WIDTH_KEY = "betterbot_betty_docked_width";
+
+function getDockedBettyWidthBounds() {
+  const minW = 320;
+  const vw = window.innerWidth || 1280;
+  const navEl = document.querySelector(".studio-nav-rail");
+  const navRectW = vw > 1100 && navEl && navEl.getBoundingClientRect ? navEl.getBoundingClientRect().width : 0;
+  const navW = vw > 1100 ? (navRectW > 0 ? navRectW : 248) : 0;
+  const maxW = Math.max(
+    minW,
+    Math.min(640, Math.floor(vw * 0.48), vw - navW - 420)
+  );
+  return { minW, maxW };
+}
+
+function clampDockedBettyWidth(desiredWidth, win = document.getElementById("bettyWindow")) {
+  const { minW, maxW } = getDockedBettyWidthBounds();
+  const numeric = Number(desiredWidth);
+  const base = Number.isFinite(numeric) && numeric > 0 ? numeric : 380;
+  const clamped = Math.round(Math.max(minW, Math.min(maxW, base)));
+  if (win && win.style) {
+    if (typeof win.style.setProperty === "function") {
+      win.style.setProperty("--betty-docked-width", `${clamped}px`);
+    } else {
+      win.style["--betty-docked-width"] = `${clamped}px`;
+    }
+  }
+  return clamped;
+}
+
 async function initBettyWidget() {
   const fab = document.getElementById("bettyFab");
   const win = document.getElementById("bettyWindow");
@@ -2119,13 +3036,61 @@ async function initBettyWidget() {
 
   if (!fab || !win) return;
 
+  let wasDockedBeforeMaximize = win.classList.contains("docked");
+  let lastFloatingRect = { left: 24, top: 72, width: 420, height: 560 };
+
+  clampDockedBettyWidth(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY), win);
+
+  function saveCurrentFloatingRect() {
+    if (
+      win.classList.contains("docked") ||
+      win.classList.contains("maximized") ||
+      win.classList.contains("hidden")
+    ) {
+      return;
+    }
+    const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : {};
+    if (rect.width > 0 && rect.height > 0) {
+      lastFloatingRect = {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+    }
+  }
+
+  function applyFloatingRect(rect = lastFloatingRect) {
+    win.style.left = `${rect.left}px`;
+    win.style.top = `${rect.top}px`;
+    win.style.width = `${rect.width}px`;
+    win.style.height = `${rect.height}px`;
+    win.style.bottom = "auto";
+    win.style.right = "auto";
+  }
+
+  function clearFloatingInlineStyles() {
+    win.style.left = "";
+    win.style.top = "";
+    win.style.width = "";
+    win.style.height = "";
+    win.style.bottom = "";
+    win.style.right = "";
+  }
+
   await refreshBettyHistory();
 
   // Header Toggle Button opens/closes Betty Push Side-Panel
   fab.addEventListener("click", () => {
     const isNowHidden = win.classList.toggle("hidden");
     fab.classList.toggle("active", !isNowHidden);
+    fab.setAttribute("aria-expanded", !isNowHidden ? "true" : "false");
     if (!isNowHidden) {
+      if (win.classList.contains("docked")) {
+        clampDockedBettyWidth(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY), win);
+      } else if (!win.classList.contains("maximized")) {
+        clampFloatingBettyToViewport(win);
+      }
       renderBettyMessages();
       input.focus();
     }
@@ -2134,46 +3099,102 @@ async function initBettyWidget() {
   closeBtn.addEventListener("click", () => {
     win.classList.add("hidden");
     fab.classList.remove("active");
+    fab.setAttribute("aria-expanded", "false");
+    fab.focus();
   });
 
-  // Dock / Float Toggle Button
+  // Dock / Float Toggle Button (preserves previous floating or docked geometry)
   if (dockBtn) {
     dockBtn.addEventListener("click", () => {
+      if (!win.classList.contains("docked") && !win.classList.contains("maximized")) {
+        saveCurrentFloatingRect();
+      }
+      const isNowDocked = !win.classList.contains("docked");
       win.classList.remove("maximized");
-      const isNowDocked = win.classList.toggle("docked");
+      if (maxBtn) maxBtn.classList.remove("active");
+      win.classList.toggle("docked", isNowDocked);
       dockBtn.classList.toggle("active", isNowDocked);
+      wasDockedBeforeMaximize = isNowDocked;
       if (isNowDocked) {
-        win.style.left = "";
-        win.style.top = "";
-        win.style.width = "";
-        win.style.height = "";
+        clearFloatingInlineStyles();
+        clampDockedBettyWidth(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY), win);
       } else {
-        win.style.left = "24px";
-        win.style.top = "80px";
-        win.style.width = "420px";
-        win.style.height = "560px";
+        applyFloatingRect(lastFloatingRect);
+        clampFloatingBettyToViewport(win);
       }
     });
   }
 
-  // Maximize / Restore
-  maxBtn.addEventListener("click", () => {
-    if (win.classList.contains("docked")) {
+  function toggleMaximizeBetty() {
+    const isEnteringMax = !win.classList.contains("maximized");
+    if (isEnteringMax) {
+      wasDockedBeforeMaximize = win.classList.contains("docked");
+      if (!wasDockedBeforeMaximize) {
+        saveCurrentFloatingRect();
+      } else {
+        clearFloatingInlineStyles();
+      }
       win.classList.remove("docked");
       if (dockBtn) dockBtn.classList.remove("active");
+      win.classList.add("maximized");
+      if (maxBtn) maxBtn.classList.add("active");
+      return;
     }
-    win.classList.toggle("maximized");
-  });
+
+    win.classList.remove("maximized");
+    if (maxBtn) maxBtn.classList.remove("active");
+    if (wasDockedBeforeMaximize) {
+      win.classList.add("docked");
+      if (dockBtn) dockBtn.classList.add("active");
+      clearFloatingInlineStyles();
+      clampDockedBettyWidth(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY), win);
+    } else {
+      win.classList.remove("docked");
+      if (dockBtn) dockBtn.classList.remove("active");
+      applyFloatingRect(lastFloatingRect);
+      clampFloatingBettyToViewport(win);
+    }
+  }
+
+  if (maxBtn) {
+    maxBtn.addEventListener("click", toggleMaximizeBetty);
+  }
 
   // Double-clicking header toggles maximize when floating
   dragHeader.addEventListener("dblclick", (e) => {
     if (e.target.closest("button") || win.classList.contains("docked")) return;
-    win.classList.toggle("maximized");
+    toggleMaximizeBetty();
   });
 
-  // Clear history for current mode
+  const resetBettyClearConfirm = () => {
+    if (bettyClearConfirmTimer) {
+      clearTimeout(bettyClearConfirmTimer);
+      bettyClearConfirmTimer = null;
+    }
+    if (clearBtn) {
+      clearBtn.classList.remove("is-confirming");
+      clearBtn.title = "נקה שיחה במצב הנוכחי";
+    }
+    if (els.bettyClearBtnLabel) {
+      els.bettyClearBtnLabel.classList.add("hidden");
+    }
+  };
+
+  // Clear history for current mode (2-step confirmation guard)
   clearBtn.addEventListener("click", async () => {
     if (isBettyLoading) return;
+    if (!clearBtn.classList.contains("is-confirming")) {
+      clearBtn.classList.add("is-confirming");
+      clearBtn.title = "לחץ שוב לאישור ניקוי השיחה";
+      if (els.bettyClearBtnLabel) {
+        els.bettyClearBtnLabel.classList.remove("hidden");
+      }
+      if (bettyClearConfirmTimer) clearTimeout(bettyClearConfirmTimer);
+      bettyClearConfirmTimer = setTimeout(resetBettyClearConfirm, 3500);
+      return;
+    }
+
+    resetBettyClearConfirm();
     try {
       const res = await apiFetch("/api/betty/clear", {
         method: "POST",
@@ -2196,6 +3217,7 @@ async function initBettyWidget() {
     btn.addEventListener("click", () => {
       const targetMode = btn.dataset.mode;
       if (!targetMode || targetMode === bettyMode) return;
+      resetBettyClearConfirm();
       bettyMode = targetMode;
       renderBettyModeUI();
     });
@@ -2219,8 +3241,14 @@ async function initBettyWidget() {
     }
   });
 
-  // Setup Dragging & Resizing (when floating)
-  setupBettyDragAndResize(win, dragHeader);
+  input.addEventListener("input", () => autoResizeTextarea(input));
+
+  // Setup Dragging & Resizing (floating 8-way + docked divider resize)
+  setupBettyDragAndResize(win, dragHeader, {
+    onFloatingRectChange: (rect) => {
+      lastFloatingRect = rect;
+    },
+  });
 }
 
 function renderBettyModeUI() {
@@ -2250,6 +3278,7 @@ function renderBettyModeUI() {
     chip.textContent = q;
     chip.addEventListener("click", () => {
       input.value = q;
+      autoResizeTextarea(input);
       input.focus();
       input.setSelectionRange(q.length, q.length);
     });
@@ -2315,6 +3344,7 @@ async function sendBettyMessage(text) {
 
   isBettyLoading = true;
   input.value = "";
+  resetTextareaHeight(input);
   sendBtn.disabled = true;
   thinking.classList.remove("hidden");
   thinkingText.innerHTML =
@@ -2406,23 +3436,99 @@ function formatRichBettyMarkdown(text) {
   return htmlLines.join("\n");
 }
 
-function setupBettyDragAndResize(win, header) {
+function clampFloatingBettyToViewport(win = document.getElementById("bettyWindow")) {
+  if (
+    !win ||
+    win.classList.contains("docked") ||
+    win.classList.contains("maximized") ||
+    win.classList.contains("hidden")
+  ) {
+    return null;
+  }
+  const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : null;
+  if (!rect || !rect.width || !rect.height) return null;
+  const vw = window.innerWidth || 1280;
+  const vh = window.innerHeight || 800;
+  const maxW = Math.max(340, vw - 16);
+  const maxH = Math.max(360, vh - 16);
+  const clampedW = Math.round(Math.min(rect.width, maxW));
+  const clampedH = Math.round(Math.min(rect.height, maxH));
+  const maxLeft = Math.max(8, vw - clampedW - 8);
+  const maxTop = Math.max(8, vh - clampedH - 8);
+  const clampedLeft = Math.round(Math.max(8, Math.min(maxLeft, rect.left)));
+  const clampedTop = Math.round(Math.max(8, Math.min(maxTop, rect.top)));
+
+  win.style.width = `${clampedW}px`;
+  win.style.height = `${clampedH}px`;
+  win.style.left = `${clampedLeft}px`;
+  win.style.top = `${clampedTop}px`;
+  win.style.bottom = "auto";
+  win.style.right = "auto";
+
+  return {
+    left: clampedLeft,
+    top: clampedTop,
+    width: clampedW,
+    height: clampedH,
+  };
+}
+
+function setupBettyDragAndResize(win, header, callbacks = {}) {
   let isDragging = false;
+  let isResizing = false;
+  let isDockedResizing = false;
+  let resizeDir = "";
+  let activePointerId = null;
+  let activeCaptureEl = null;
   let startX = 0,
     startY = 0,
     startLeft = 0,
-    startTop = 0;
+    startTop = 0,
+    startW = 0,
+    startH = 0;
+
+  function capturePointer(el, pointerId) {
+    activeCaptureEl = el;
+    activePointerId = pointerId;
+    if (el && typeof el.setPointerCapture === "function" && pointerId !== undefined) {
+      try {
+        el.setPointerCapture(pointerId);
+      } catch {
+        // Ignore if element cannot capture pointer in synthetic environments
+      }
+    }
+  }
+
+  function releaseCapturedPointer() {
+    if (
+      activeCaptureEl &&
+      typeof activeCaptureEl.releasePointerCapture === "function" &&
+      activePointerId !== null
+    ) {
+      try {
+        activeCaptureEl.releasePointerCapture(activePointerId);
+      } catch {
+        // Ignore if pointer already released
+      }
+    }
+    activeCaptureEl = null;
+    activePointerId = null;
+  }
 
   function ensureAbsolutePosition() {
-    const rect = win.getBoundingClientRect();
+    const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : null;
+    if (!rect) return;
     win.style.left = `${rect.left}px`;
     win.style.top = `${rect.top}px`;
+    win.style.width = `${rect.width}px`;
+    win.style.height = `${rect.height}px`;
     win.style.bottom = "auto";
     win.style.right = "auto";
   }
 
-  header.addEventListener("mousedown", (e) => {
+  header.addEventListener("pointerdown", (e) => {
     if (
+      e.button !== 0 ||
       e.target.closest("button") ||
       win.classList.contains("maximized") ||
       win.classList.contains("docked")
@@ -2431,26 +3537,44 @@ function setupBettyDragAndResize(win, header) {
     }
     ensureAbsolutePosition();
     isDragging = true;
+    win.classList.add("is-dragging");
     startX = e.clientX;
     startY = e.clientY;
     startLeft = parseFloat(win.style.left) || 0;
     startTop = parseFloat(win.style.top) || 0;
     document.body.style.userSelect = "none";
+    capturePointer(header, e.pointerId);
   });
 
-  // 8-Direction Resizing
-  let isResizing = false;
-  let resizeDir = "";
-  let startW = 0,
-    startH = 0;
-
+  // 8-Direction Floating Resizing & Docked Edge-Rail Horizontal Resizing
   win.querySelectorAll(".betty-resize-handle").forEach((handle) => {
-    handle.addEventListener("mousedown", (e) => {
-      if (win.classList.contains("maximized") || win.classList.contains("docked")) return;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || win.classList.contains("maximized")) return;
+      const dir = handle.dataset.resize || "se";
+
+      if (win.classList.contains("docked")) {
+        if (dir !== "e" || (window.innerWidth || 1280) <= 1100) return;
+        e.stopPropagation();
+        e.preventDefault();
+        isDockedResizing = true;
+        resizeDir = "e";
+        startX = e.clientX;
+        const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : null;
+        startW =
+          rect && rect.width > 0
+            ? rect.width
+            : clampDockedBettyWidth(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY), win);
+        win.classList.add("is-resizing");
+        document.body.style.userSelect = "none";
+        capturePointer(handle, e.pointerId);
+        return;
+      }
+
       e.stopPropagation();
+      e.preventDefault();
       ensureAbsolutePosition();
       isResizing = true;
-      resizeDir = handle.dataset.resize || "se";
+      resizeDir = dir;
       startX = e.clientX;
       startY = e.clientY;
       const rect = win.getBoundingClientRect();
@@ -2458,25 +3582,36 @@ function setupBettyDragAndResize(win, header) {
       startH = rect.height;
       startLeft = rect.left;
       startTop = rect.top;
+      win.classList.add("is-resizing");
       document.body.style.userSelect = "none";
+      capturePointer(handle, e.pointerId);
     });
   });
 
-  window.addEventListener("mousemove", (e) => {
-    if (isDragging) {
+  window.addEventListener("pointermove", (e) => {
+    if (isDockedResizing) {
+      // Betty is docked on the left edge in RTL; rightward mouse movement (+dx) widens the panel.
+      const dx = e.clientX - startX;
+      clampDockedBettyWidth(startW + dx, win);
+    } else if (isDragging) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
-      const maxLeft = window.innerWidth - 100;
-      const maxTop = window.innerHeight - 60;
+      const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : { width: 420, height: 560 };
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 800;
+      const maxLeft = Math.max(8, vw - (rect.width || 420) - 8);
+      const maxTop = Math.max(8, vh - (rect.height || 560) - 8);
       const newLeft = Math.max(8, Math.min(maxLeft, startLeft + dx));
       const newTop = Math.max(8, Math.min(maxTop, startTop + dy));
-      win.style.left = `${newLeft}px`;
-      win.style.top = `${newTop}px`;
+      win.style.left = `${Math.round(newLeft)}px`;
+      win.style.top = `${Math.round(newTop)}px`;
     } else if (isResizing) {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
+      const vw = window.innerWidth || 1280;
+      const vh = window.innerHeight || 800;
       const minW = 340;
-      const minH = 380;
+      const minH = 360;
 
       let newW = startW;
       let newH = startH;
@@ -2484,38 +3619,71 @@ function setupBettyDragAndResize(win, header) {
       let newT = startTop;
 
       if (resizeDir.includes("e")) {
-        newW = Math.max(minW, Math.min(window.innerWidth - startLeft - 8, startW + dx));
+        newW = Math.max(minW, Math.min(vw - startLeft - 8, startW + dx));
       }
       if (resizeDir.includes("s")) {
-        newH = Math.max(minH, Math.min(window.innerHeight - startTop - 8, startH + dy));
+        newH = Math.max(minH, Math.min(vh - startTop - 8, startH + dy));
       }
       if (resizeDir.includes("w")) {
-        const possibleW = startW - dx;
-        if (possibleW >= minW && startLeft + dx >= 8) {
-          newW = possibleW;
-          newL = startLeft + dx;
-        }
+        const rightEdge = startLeft + startW;
+        const clampedLeft = Math.max(8, Math.min(rightEdge - minW, startLeft + dx));
+        newL = clampedLeft;
+        newW = rightEdge - clampedLeft;
       }
       if (resizeDir.includes("n")) {
-        const possibleH = startH - dy;
-        if (possibleH >= minH && startTop + dy >= 8) {
-          newH = possibleH;
-          newT = startTop + dy;
-        }
+        const bottomEdge = startTop + startH;
+        const clampedTop = Math.max(8, Math.min(bottomEdge - minH, startTop + dy));
+        newT = clampedTop;
+        newH = bottomEdge - clampedTop;
       }
 
-      win.style.width = `${newW}px`;
-      win.style.height = `${newH}px`;
-      win.style.left = `${newL}px`;
-      win.style.top = `${newT}px`;
+      win.style.width = `${Math.round(newW)}px`;
+      win.style.height = `${Math.round(newH)}px`;
+      win.style.left = `${Math.round(newL)}px`;
+      win.style.top = `${Math.round(newT)}px`;
     }
   });
 
-  window.addEventListener("mouseup", () => {
-    if (isDragging || isResizing) {
-      isDragging = false;
-      isResizing = false;
-      document.body.style.userSelect = "";
+  const endPointerInteraction = () => {
+    if (!isDragging && !isResizing && !isDockedResizing) return;
+
+    if (isDockedResizing) {
+      const rect = win.getBoundingClientRect ? win.getBoundingClientRect() : null;
+      const finalW = clampDockedBettyWidth(
+        rect && rect.width > 0 ? rect.width : startW,
+        win
+      );
+      localStorage.setItem(BETTY_DOCKED_WIDTH_KEY, String(finalW));
+    } else {
+      const clampedRect = clampFloatingBettyToViewport(win);
+      if (clampedRect && typeof callbacks.onFloatingRectChange === "function") {
+        callbacks.onFloatingRectChange(clampedRect);
+      }
+    }
+
+    isDragging = false;
+    isResizing = false;
+    isDockedResizing = false;
+    win.classList.remove("is-dragging", "is-resizing");
+    document.body.style.userSelect = "";
+    releaseCapturedPointer();
+  };
+
+  window.addEventListener("pointerup", endPointerInteraction);
+  window.addEventListener("pointercancel", endPointerInteraction);
+  window.addEventListener("resize", () => {
+    if (win.classList.contains("docked")) {
+      const rawProp =
+        win.style && typeof win.style.getPropertyValue === "function"
+          ? win.style.getPropertyValue("--betty-docked-width")
+          : "";
+      const currentW = parseFloat(rawProp) || parseFloat(localStorage.getItem(BETTY_DOCKED_WIDTH_KEY) || "") || 380;
+      clampDockedBettyWidth(currentW, win);
+      return;
+    }
+    const clampedRect = clampFloatingBettyToViewport(win);
+    if (clampedRect && typeof callbacks.onFloatingRectChange === "function") {
+      callbacks.onFloatingRectChange(clampedRect);
     }
   });
 }

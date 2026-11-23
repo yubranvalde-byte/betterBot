@@ -13,7 +13,9 @@ services:
       - key: FAST_MODEL
         value: gemini-4-hydrogen
       - key: COMPILER_MODEL
-        value: gemini-4-argon
+        value: gemini-4-neon
+      - key: FALLBACK_MODEL
+        value: gemini-4-hydrogen
       - key: DECISION_MODEL
         value: gemini-decision-1
       - key: DB_PATH

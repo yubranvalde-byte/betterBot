@@ -153,6 +153,7 @@ def get_or_load_session(session_id: str, owner_id: str) -> Optional[Dict[str, An
 class UserMessageRequest(BaseModel):
     message: str
     mode: Optional[str] = "auto"  # "auto", "interview", "override"
+    model_overrides: Optional[Dict[str, str]] = None
 
 
 class RenameSessionRequest(BaseModel):
@@ -250,6 +251,7 @@ def parse_blueprint_tags(xml_str: str) -> Dict[str, str]:
         "TONE_AND_LANGUAGE",
         "DESCRIPTION_AND_TRIGGERS",
         "NEGATIVE_TRIGGERS",
+        "SUITE_TOPOLOGY",
         "CLARIFICATION_GATE",
         "CORE_WORKFLOW",
         "PROGRESSIVE_DISCLOSURE_REFS",
@@ -311,6 +313,7 @@ def create_new_session(
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
+        "model_telemetry": {},
     }
     session = {
         "session_id": session_id,
@@ -325,6 +328,7 @@ def create_new_session(
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
+        "model_telemetry": {},
         "state": state,
         "parsed_blueprint": {},
         "clean_champion_prompt": "",
@@ -387,9 +391,24 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
         or session.get("slug_name")
         or ""
     )
-    session["reference_files"] = state.get("reference_files") or session.get("reference_files") or {}
+    raw_state_refs = state.get("reference_files")
+    sanitized_refs: Dict[str, str] = {}
+    if isinstance(raw_state_refs, dict):
+        for rel_path, content in raw_state_refs.items():
+            norm = main.normalize_artifact_path(rel_path)
+            if norm:
+                sanitized_refs[norm] = content if isinstance(content, str) else str(content or "")
+    elif isinstance(session.get("reference_files"), dict):
+        for rel_path, content in session["reference_files"].items():
+            norm = main.normalize_artifact_path(rel_path)
+            if norm:
+                sanitized_refs[norm] = content if isinstance(content, str) else str(content or "")
+
+    state["reference_files"] = sanitized_refs
+    session["reference_files"] = sanitized_refs
     session["rubric_scores"] = state.get("rubric_scores") or session.get("rubric_scores") or {}
     session["readiness_scores"] = state.get("readiness_scores") or session.get("readiness_scores") or {}
+    session["model_telemetry"] = state.get("model_telemetry") or session.get("model_telemetry") or {}
 
     # Auto-derive session title from <ROLE_TITLE>, <TITLE>, or slug_name if not manually renamed
     if not session.get("title_manually_set"):
@@ -406,7 +425,7 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
     if champ_p:
         _, parsed_refs = main.parse_compiled_artifacts(champ_p)
         if parsed_refs:
-            state["reference_files"] = {**(state.get("reference_files") or {}), **parsed_refs}
+            state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
             session["reference_files"] = state["reference_files"]
         parts = extract_construct_parts(champ_p)
         session["clean_champion_prompt"] = parts["clean_prompt"]
@@ -418,7 +437,7 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
     if chall_p:
         _, parsed_refs = main.parse_compiled_artifacts(chall_p)
         if parsed_refs:
-            state["reference_files"] = {**(state.get("reference_files") or {}), **parsed_refs}
+            state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
             session["reference_files"] = state["reference_files"]
         parts = extract_construct_parts(chall_p)
         session["clean_challenger_prompt"] = parts["clean_prompt"]
@@ -446,8 +465,11 @@ async def health_check():
     return {
         "status": "ok",
         "model": getattr(main.llm, "model", main.FAST_MODEL),
+        "fast_model": main.FAST_MODEL,
         "compiler_model": getattr(main.compiler_llm, "model", main.COMPILER_MODEL),
+        "fallback_model": main.FALLBACK_MODEL,
         "decision_model": main.DECISION_MODEL,
+        "routing": main.get_model_routing_summary(),
         "active_sessions": len(SESSIONS),
     }
 
@@ -555,6 +577,67 @@ async def delete_session_endpoint(
     return {"deleted": bool(deleted)}
 
 
+def build_install_guide_md(
+    target_type: str, slug_name: str, file_paths: List[str]
+) -> str:
+    """
+    Deterministically builds BETTERBOT_INSTALL.md (0 LLM calls) in concise,
+    declarative English with strict Do-No-Harm installation rules.
+    """
+    safe_target = (target_type or "SYSTEM_PROMPT").strip().upper()
+    safe_slug = (
+        re.sub(r"[^a-zA-Z0-9_-]+", "-", (slug_name or "").strip()).strip("-")
+        or "artifact"
+    )
+
+    manifest_items: List[str] = []
+    seen = set()
+    for raw_path in file_paths or []:
+        norm = main.normalize_artifact_path(raw_path)
+        if norm and norm not in seen:
+            seen.add(norm)
+            manifest_items.append(norm)
+
+    manifest_lines = (
+        "\n".join(f"- `{safe_slug}/{p}`" for p in manifest_items)
+        or f"- `{safe_slug}/` (empty)"
+    )
+    has_system_prompt = "SYSTEM_PROMPT.md" in seen
+    policy_rules = [
+        "**Inspect Workspace First:** Before copying any files, inspect the target repository to detect the active skills directory "
+        "(such as `.agent/skills/`, `.claude/skills/`, `.gemini/skills/`, or the user's configured skills root). "
+        "If no skills directory is detected or the target location is unclear, ask the user before writing files.",
+        "**Check Slug Collisions & Confirm Overwrites:** Check whether the target slug folder or any destination file already exists. "
+        "If a collision is detected, halt and request explicit user confirmation before overwriting.",
+        "**Copy Skill Folders Intact:** Preserve relative `references/` paths and nested directory structures intact when installing "
+        "`<slug>/` or nested `skills/<sub_slug>/` folders.",
+    ]
+    if has_system_prompt:
+        policy_rules.append(
+            "**Root Instruction File Protection (`SYSTEM_PROMPT.md`):** `SYSTEM_PROMPT.md` is present in this package. "
+            "Do NOT automatically overwrite or append to root workspace instruction files "
+            "(`CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `AGENTS.md`). Present `SYSTEM_PROMPT.md` to the user or ask how they prefer to integrate it."
+        )
+    policy_rules.append(
+        "**Archive & Installer Metadata Exclusion (`blueprint.xml`, `BETTERBOT_INSTALL.md`):** "
+        "Both `blueprint.xml` and `BETTERBOT_INSTALL.md` are compiler/installer metadata only and must NOT be copied into "
+        "runtime skill or instruction directories or loaded into active agent context."
+    )
+    policy_text = "\n".join(f"{idx}. {rule}" for idx, rule in enumerate(policy_rules, start=1))
+
+    return (
+        f"# BetterBot Package Installation Specification: `{safe_slug}`\n\n"
+        "This file is a declarative installation manifest for human operators and workspace agents.\n\n"
+        "## Package Metadata\n"
+        f"- **Target Type:** `{safe_target}`\n"
+        f"- **Root Slug:** `{safe_slug}/`\n\n"
+        "## Included File Manifest\n"
+        f"{manifest_lines}\n\n"
+        "## Do No Harm Installation Policy\n"
+        f"{policy_text}\n"
+    )
+
+
 @app.get("/api/sessions/{session_id}/download")
 async def download_session_bundle(
     session_id: str, owner_id: str = Depends(resolve_owner_id)
@@ -569,35 +652,56 @@ async def download_session_bundle(
     safe_slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", raw_slug).strip("-") or session_id
 
     primary_content = sess.get("clean_champion_prompt") or sess.get("clean_challenger_prompt") or ""
-    ref_files = dict(sess.get("reference_files") or {})
     raw_blueprint = sess.get("raw_blueprint") or ""
 
-    buf = io.BytesIO()
+    sanitized_refs: Dict[str, str] = {}
+    for rel_path, content in (sess.get("reference_files") or {}).items():
+        norm_path = main.normalize_artifact_path(rel_path)
+        if not norm_path or norm_path == "BETTERBOT_INSTALL.md":
+            continue
+        sanitized_refs[norm_path] = content or ""
+
+    entries: List[Tuple[str, str]] = []
     written_paths = set()
 
+    if target_type == "SKILL_PACKAGE":
+        if "SKILL.md" not in sanitized_refs and primary_content:
+            entries.append(("SKILL.md", primary_content))
+            written_paths.add("SKILL.md")
+    elif target_type == "HYBRID_BUNDLE":
+        if (
+            "SYSTEM_PROMPT.md" not in sanitized_refs
+            and "SKILL.md" not in sanitized_refs
+            and primary_content
+        ):
+            entries.append(("SYSTEM_PROMPT.md", primary_content))
+            written_paths.add("SYSTEM_PROMPT.md")
+    else:
+        if "SYSTEM_PROMPT.md" not in sanitized_refs and primary_content:
+            entries.append(("SYSTEM_PROMPT.md", primary_content))
+            written_paths.add("SYSTEM_PROMPT.md")
+
+    for norm_path, content in sanitized_refs.items():
+        if norm_path in written_paths or (norm_path == "blueprint.xml" and raw_blueprint):
+            continue
+        entries.append((norm_path, content))
+        written_paths.add(norm_path)
+
+    if raw_blueprint and "blueprint.xml" not in written_paths:
+        entries.append(("blueprint.xml", raw_blueprint))
+        written_paths.add("blueprint.xml")
+
+    manifest_paths = [rel for rel, _ in entries] + ["BETTERBOT_INSTALL.md"]
+    install_guide = build_install_guide_md(target_type, safe_slug, manifest_paths)
+    entries.append(("BETTERBOT_INSTALL.md", install_guide))
+
+    buf = io.BytesIO()
     with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        if target_type == "SKILL_PACKAGE":
-            if "SKILL.md" not in ref_files and primary_content:
-                zf.writestr("SKILL.md", primary_content)
-                written_paths.add("SKILL.md")
-        elif target_type == "HYBRID_BUNDLE":
-            if "SYSTEM_PROMPT.md" not in ref_files and "SKILL.md" not in ref_files and primary_content:
-                zf.writestr("SYSTEM_PROMPT.md", primary_content)
-                written_paths.add("SYSTEM_PROMPT.md")
-        else:
-            if "SYSTEM_PROMPT.md" not in ref_files and primary_content:
-                zf.writestr("SYSTEM_PROMPT.md", primary_content)
-                written_paths.add("SYSTEM_PROMPT.md")
-
-        for rel_path, content in ref_files.items():
-            norm_path = rel_path.lstrip("/\\").replace("\\", "/")
-            if not norm_path or ".." in norm_path or norm_path in written_paths:
+        for rel_path, content in entries:
+            clean_rel = main.normalize_artifact_path(rel_path)
+            if not clean_rel:
                 continue
-            zf.writestr(norm_path, content or "")
-            written_paths.add(norm_path)
-
-        if raw_blueprint:
-            zf.writestr("blueprint.xml", raw_blueprint)
+            zf.writestr(f"{safe_slug}/{clean_rel}", content)
 
     buf.seek(0)
     return Response(
@@ -605,6 +709,44 @@ async def download_session_bundle(
         media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{safe_slug}.zip"'},
     )
+
+
+def _apply_node_update(state: Dict[str, Any], update: Dict[str, Any]) -> None:
+    """Applies node state deltas while preserving additive error_log and merged model_telemetry."""
+    if not update:
+        return
+    if "error_log" in update:
+        state["error_log"] = list(state.get("error_log", [])) + list(
+            update["error_log"] or []
+        )
+    if "model_telemetry" in update:
+        merged_tel = dict(state.get("model_telemetry") or {})
+        merged_tel.update(update["model_telemetry"] or {})
+        state["model_telemetry"] = merged_tel
+    for k, v in update.items():
+        if k not in ("error_log", "model_telemetry"):
+            state[k] = v
+
+
+def _attach_timeline_telemetry(
+    entry: Dict[str, Any], node_tel: Optional[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Attaches optional model/thinking/fallback metadata to a timeline item."""
+    if not node_tel:
+        return entry
+    if node_tel.get("model"):
+        entry["model"] = node_tel["model"]
+    if node_tel.get("thinking_level"):
+        entry["thinking_level"] = node_tel["thinking_level"]
+    if node_tel.get("fallback_used"):
+        entry["fallback_used"] = True
+        fallback_from = node_tel.get("fallback_from") or "primary"
+        entry["detail"] = (
+            f"{entry.get('detail', '')} [Fallback: {fallback_from} -> {node_tel.get('model')}]"
+        ).strip()
+    if node_tel.get("latency_ms") is not None:
+        entry["latency_ms"] = node_tel["latency_ms"]
+    return entry
 
 
 @app.post("/api/sessions/{session_id}/stream")
@@ -632,6 +774,12 @@ async def stream_factory_execution(
         session["title"] = user_msg[:36] + ("..." if len(user_msg) > 36 else "")
 
     state: FactoryState = session["state"]
+    if req.model_overrides is not None:
+        sanitized_overrides = main.sanitize_model_overrides(req.model_overrides)
+        if sanitized_overrides:
+            state["model_overrides"] = sanitized_overrides
+        elif req.model_overrides == {}:
+            state.pop("model_overrides", None)
 
     # Determine whether this is an interview turn or a manual override directive
     is_override = (
@@ -703,6 +851,7 @@ async def stream_factory_execution(
                     "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
                 }
                 label_title, label_desc = node_labels.get(current_node, (current_node, "מבצע פעולה..."))
+                routing_plan = main.get_node_routing_plan(current_node, state)
 
                 yield sse(
                     "node_start",
@@ -711,15 +860,20 @@ async def stream_factory_execution(
                         "title": label_title,
                         "description": label_desc,
                         "iteration": state.get("iteration_count", 0),
+                        "model": routing_plan["model"],
+                        "thinking_level": routing_plan["thinking_level"],
                     },
                 )
                 await asyncio.sleep(0)
+
+                node_tel: Dict[str, Any] = {}
 
                 # Execute the node in a worker thread so event loop stays responsive
                 if current_node == "node_1_helper":
                     session["status"] = "interviewing"
                     update = await asyncio.to_thread(node_helper, state)
-                    state.update(update)
+                    _apply_node_update(state, update)
+                    node_tel = (update.get("model_telemetry") or {}).get("node_1_helper") or {}
 
                     parts = extract_helper_parts(state.get("challenger_xml", ""))
                     has_blueprint = has_blueprint_xml(state.get("challenger_xml", ""))
@@ -738,14 +892,17 @@ async def stream_factory_execution(
                             }
                         )
                         session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_1_helper",
-                                "title": "הופק XML Blueprint",
-                                "detail": "הראיון הושלם ותורגם לארכיטקטורה קוגניטיבית.",
-                                "status": "success",
-                            }
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_1_helper",
+                                    "title": "הופק XML Blueprint",
+                                    "detail": "הראיון הושלם ותורגם לארכיטקטורה קוגניטיבית.",
+                                    "status": "success",
+                                },
+                                node_tel,
+                            )
                         )
                     else:
                         session["chat_history"].append(
@@ -760,14 +917,17 @@ async def stream_factory_execution(
                             }
                         )
                         session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_1_helper",
-                                "title": "שאלת מיקוד בראיון",
-                                "detail": parts["chat_text"][:120] + ("..." if len(parts["chat_text"]) > 120 else ""),
-                                "status": "info",
-                            }
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_1_helper",
+                                    "title": "שאלת מיקוד בראיון",
+                                    "detail": parts["chat_text"][:120] + ("..." if len(parts["chat_text"]) > 120 else ""),
+                                    "status": "info",
+                                },
+                                node_tel,
+                            )
                         )
 
                     next_node = route_from_helper(state)
@@ -775,34 +935,42 @@ async def stream_factory_execution(
                 elif current_node == "node_2_construct":
                     session["status"] = "compiling"
                     update = await asyncio.to_thread(node_construct, state)
-                    state.update(update)
+                    _apply_node_update(state, update)
+                    node_tel = (update.get("model_telemetry") or {}).get("node_2_construct") or {}
 
                     session["timeline"].append(
-                        {
-                            "id": str(uuid.uuid4())[:8],
-                            "timestamp": step_time,
-                            "node": "node_2_construct",
-                            "title": "הידור הפרומפט הושלם (The Construct)",
-                            "detail": f"נוצר Challenger Prompt באורך {len(state.get('challenger_prompt', ''))} תווים.",
-                            "status": "success",
-                        }
+                        _attach_timeline_telemetry(
+                            {
+                                "id": str(uuid.uuid4())[:8],
+                                "timestamp": step_time,
+                                "node": "node_2_construct",
+                                "title": "הידור הפרומפט הושלם (The Construct)",
+                                "detail": f"נוצר Challenger Prompt באורך {len(state.get('challenger_prompt', ''))} תווים.",
+                                "status": "success",
+                            },
+                            node_tel,
+                        )
                     )
                     next_node = "node_4_adjudicator"
 
                 elif current_node == "node_3_upgrader":
                     session["status"] = "compiling"
                     update = await asyncio.to_thread(node_upgrader, state)
-                    state.update(update)
+                    _apply_node_update(state, update)
+                    node_tel = (update.get("model_telemetry") or {}).get("node_3_upgrader") or {}
 
                     session["timeline"].append(
-                        {
-                            "id": str(uuid.uuid4())[:8],
-                            "timestamp": step_time,
-                            "node": "node_3_upgrader",
-                            "title": f"שדרוג גרסה הושלם (איטרציה {state.get('iteration_count', 1)})",
-                            "detail": "עודכנו ה-XML וה-System Prompt בהתאם להנחיות התיקון.",
-                            "status": "info",
-                        }
+                        _attach_timeline_telemetry(
+                            {
+                                "id": str(uuid.uuid4())[:8],
+                                "timestamp": step_time,
+                                "node": "node_3_upgrader",
+                                "title": f"שדרוג גרסה הושלם (איטרציה {state.get('iteration_count', 1)})",
+                                "detail": "עודכנו ה-XML וה-System Prompt בהתאם להנחיות התיקון.",
+                                "status": "info",
+                            },
+                            node_tel,
+                        )
                     )
                     next_node = "node_4_adjudicator"
 
@@ -810,50 +978,53 @@ async def stream_factory_execution(
                     session["status"] = "compiling"
                     prev_iter = state.get("iteration_count", 0)
                     update = await asyncio.to_thread(node_adjudicator, state)
-                    # Note: error_log uses operator.add in LangGraph!
-                    if "error_log" in update:
-                        state["error_log"] = list(state.get("error_log", [])) + list(
-                            update["error_log"]
-                        )
-                    for k, v in update.items():
-                        if k != "error_log":
-                            state[k] = v
+                    _apply_node_update(state, update)
+                    node_tel = (update.get("model_telemetry") or {}).get("node_4_adjudicator") or {}
 
                     last_log = state["error_log"][-1] if state.get("error_log") else ""
                     qa_mode = "Baseline QA" if prev_iter == 0 else f"Regression QA (#{prev_iter})"
 
                     if "[PASS]" in last_log:
                         session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_4_adjudicator",
-                                "title": f"{qa_mode}: PASS ✅",
-                                "detail": "הפרומפט עמד בכל בדיקות האיכות ואושר לשימוש!",
-                                "status": "success",
-                            }
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_4_adjudicator",
+                                    "title": f"{qa_mode}: PASS ✅",
+                                    "detail": "הפרומפט עמד בכל בדיקות האיכות ואושר לשימוש!",
+                                    "status": "success",
+                                },
+                                node_tel,
+                            )
                         )
                     elif "[FAIL]" in last_log:
                         session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_4_adjudicator",
-                                "title": f"{qa_mode}: FAIL 🔄",
-                                "detail": last_log,
-                                "status": "warning",
-                            }
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_4_adjudicator",
+                                    "title": f"{qa_mode}: FAIL 🔄",
+                                    "detail": last_log,
+                                    "status": "warning",
+                                },
+                                node_tel,
+                            )
                         )
                     else:
                         session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_4_adjudicator",
-                                "title": f"{qa_mode}: ESCALATE ⚠️",
-                                "detail": last_log,
-                                "status": "danger",
-                            }
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_4_adjudicator",
+                                    "title": f"{qa_mode}: ESCALATE ⚠️",
+                                    "detail": last_log,
+                                    "status": "danger",
+                                },
+                                node_tel,
+                            )
                         )
 
                     next_node = route_from_adjudicator(state)
@@ -887,6 +1058,7 @@ async def stream_factory_execution(
                     {
                         "node": current_node,
                         "next_node": None if next_node == main.END else next_node,
+                        "telemetry": node_tel,
                         "session": session,
                     },
                 )
@@ -1027,18 +1199,48 @@ def build_session_context_for_betty(session_id: Optional[str], owner_id: str) ->
         f"Slug Name: {sess.get('slug_name') or 'N/A'}",
         f"Current Status: {sess.get('status')} (Active Node: {sess.get('active_node')})",
         f"QA Iteration Count: {st.get('iteration_count', 0)} / {getattr(main, 'MAX_QA_ITERATIONS', 2)}",
+        f"Model Routing: Helper/Betty={main.HELPER_MODEL}(low), Construct/Upgrader={main.CONSTRUCT_MODEL}(med/low), Adjudicator={main.ADJUDICATOR_MODEL}(low), Fallback={main.FALLBACK_MODEL}, Decision={main.DECISION_MODEL}",
     ]
-    if sess.get("rubric_scores"):
+    rubric_scores = sess.get("rubric_scores") or {}
+    if rubric_scores:
         lines.append(
-            f"gemini-decision-1 Rubric Scores:\n{json.dumps(sess['rubric_scores'], ensure_ascii=False)}"
+            f"gemini-decision-1 Rubric Scores:\n{json.dumps(rubric_scores, ensure_ascii=False)}"
         )
+        if rubric_scores.get("trigger_deconfliction") is not None:
+            lines.append(
+                f"Trigger De-confliction Score (SKILL_SUITE 7th Dimension): {rubric_scores['trigger_deconfliction']}/5"
+            )
     if sess.get("raw_blueprint"):
         lines.append(f"Current Blueprint XML:\n{sess['raw_blueprint']}")
     if sess.get("clean_champion_prompt"):
         lines.append(f"Current Champion Artifact:\n{sess['clean_champion_prompt'][:2500]}")
-    if sess.get("reference_files"):
-        ref_summary = ", ".join(sess["reference_files"].keys())
-        lines.append(f"Auxiliary Reference Files (Progressive Disclosure): {ref_summary}")
+    ref_files = sess.get("reference_files") or {}
+    if ref_files:
+        ref_paths = list(ref_files.keys())
+        has_nested_suite = any(p.startswith("skills/") for p in ref_paths)
+        target_type_upper = str(sess.get("target_type") or "SYSTEM_PROMPT").strip().upper()
+        if target_type_upper == "SKILL_SUITE" or has_nested_suite:
+            tree_lines = "\n".join(f"  - {p}" for p in ref_paths)
+            lines.append(f"SKILL_SUITE File Tree ({len(ref_paths)} files):\n{tree_lines}")
+            skill_excerpts = []
+            for path in ref_paths:
+                if path.startswith("skills/") and path.endswith("/SKILL.md"):
+                    excerpt = (ref_files.get(path) or "").strip()[:600]
+                    if excerpt:
+                        skill_excerpts.append(f"--- {path} ---\n{excerpt}")
+            if skill_excerpts:
+                lines.append(
+                    "Sibling Skill Frontmatter & Trigger Excerpts:\n"
+                    + "\n\n".join(skill_excerpts)
+                )
+            lines.append(
+                "Export Package Note: Downloading this session as .ZIP bundles all nested skills under "
+                "`<slug_name>/skills/<sub_slug>/` together with `blueprint.xml` and a Do-No-Harm "
+                "`BETTERBOT_INSTALL.md` guide."
+            )
+        else:
+            ref_summary = ", ".join(ref_paths)
+            lines.append(f"Auxiliary Reference Files (Progressive Disclosure): {ref_summary}")
     if st.get("error_log"):
         lines.append("QA Error Log:\n" + "\n".join(st["error_log"][-4:]))
     lines.append("</current_session_context>")
@@ -1164,15 +1366,8 @@ async def betty_chat_endpoint(
     lc_messages.append(HumanMessage(content=user_msg))
 
     try:
-        response = await asyncio.to_thread(main.llm.invoke, lc_messages)
-        raw_content = response.content
-        if isinstance(raw_content, list):
-            content_str = "".join(
-                part.get("text", "") if isinstance(part, dict) else str(part)
-                for part in raw_content
-            )
-        else:
-            content_str = str(raw_content)
+        response, betty_tel = await asyncio.to_thread(main.invoke_betty, lc_messages)
+        content_str = main._normalize_content(response.content)
 
         parsed = parse_betty_response(content_str)
         reply_item = {
@@ -1182,6 +1377,9 @@ async def betty_chat_endpoint(
             "text": parsed["text"],
             "thought": parsed["thought"],
             "raw_text": content_str,
+            "model": betty_tel.get("model"),
+            "thinking_level": betty_tel.get("thinking_level"),
+            "fallback_used": betty_tel.get("fallback_used", False),
             "timestamp": datetime.now().strftime("%H:%M:%S"),
         }
         history.append(reply_item)

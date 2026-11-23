@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import uuid
@@ -56,6 +57,60 @@ def _require_owner_id(owner_id: str) -> str:
     if not clean:
         raise ValueError("owner_id is required")
     return clean
+
+
+def _normalize_rel_path(raw_path: Any) -> str:
+    if not isinstance(raw_path, str):
+        return ""
+    cleaned = raw_path.strip().strip("`\"'").strip()
+    if not cleaned or "\x00" in cleaned:
+        return ""
+    if (
+        re.match(r"^[a-zA-Z]:", cleaned)
+        or cleaned.startswith("\\\\")
+        or cleaned.startswith("//")
+    ):
+        return ""
+    cleaned = cleaned.replace("\\", "/").strip("/")
+    if not cleaned:
+        return ""
+    segments = cleaned.split("/")
+    for seg in segments:
+        if not seg or seg in (".", "..") or ":" in seg:
+            return ""
+    return "/".join(segments)
+
+
+def _sanitize_reference_files(raw_refs: Any) -> Dict[str, str]:
+    if not isinstance(raw_refs, dict):
+        return {}
+    cleaned: Dict[str, str] = {}
+    for raw_key, raw_val in raw_refs.items():
+        norm_key = _normalize_rel_path(raw_key)
+        if not norm_key:
+            continue
+        cleaned[norm_key] = raw_val if isinstance(raw_val, str) else str(raw_val or "")
+    return cleaned
+
+
+def _hydrate_session_reference_files(session_data: Dict[str, Any]) -> None:
+    """Normalizes and synchronizes nested `reference_files` across top-level and `state`."""
+    if not isinstance(session_data, dict):
+        return
+    state = session_data.get("state")
+    top_refs = _sanitize_reference_files(session_data.get("reference_files"))
+    state_refs = (
+        _sanitize_reference_files(state.get("reference_files"))
+        if isinstance(state, dict)
+        else {}
+    )
+    if isinstance(state, dict) and "reference_files" in state:
+        merged_refs = {**top_refs, **state_refs}
+    else:
+        merged_refs = {**state_refs, **top_refs}
+    session_data["reference_files"] = dict(merged_refs)
+    if isinstance(state, dict):
+        state["reference_files"] = dict(merged_refs)
 
 
 def _extract_metadata(session_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -181,6 +236,7 @@ def save_session(session_id: str, session_data: Dict[str, Any], owner_id: str) -
     created_iso = session_data.get("created_at_iso") or now_iso
     session_data["created_at_iso"] = created_iso
     session_data["updated_at_iso"] = now_iso
+    _hydrate_session_reference_files(session_data)
 
     payload_to_store = {k: v for k, v in session_data.items() if k != "owner_id"}
     meta = _extract_metadata(payload_to_store)
@@ -238,9 +294,14 @@ def load_session(session_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
         if isinstance(data, dict):
             data.pop("owner_id", None)
             data.setdefault("session_id", row["session_id"])
+            data.setdefault(
+                "model_telemetry",
+                (data.get("state") or {}).get("model_telemetry") or {},
+            )
             data["title"] = row["title"]
             data["created_at_iso"] = row["created_at"]
             data["updated_at_iso"] = row["updated_at"]
+            _hydrate_session_reference_files(data)
             return data
     except Exception:
         return None
@@ -346,6 +407,7 @@ def export_workspace_sessions(owner_id: str) -> List[Dict[str, Any]]:
         data["status"] = row["status"] or data.get("status") or "idle"
         data["created_at_iso"] = row["created_at"]
         data["updated_at_iso"] = row["updated_at"]
+        _hydrate_session_reference_files(data)
         exported.append(data)
     return exported
 
@@ -408,12 +470,15 @@ def import_workspace_sessions(owner_id: str, sessions_payload: Any) -> Dict[str,
                 sess["chat_history"] = []
             if not isinstance(sess.get("timeline"), list):
                 sess["timeline"] = []
+            if not isinstance(sess.get("model_telemetry"), dict):
+                sess["model_telemetry"] = {}
 
             now_iso = _utc_now_iso()
             created_iso = str(sess.get("created_at_iso") or now_iso)
             updated_iso = str(sess.get("updated_at_iso") or now_iso)
             sess["created_at_iso"] = created_iso
             sess["updated_at_iso"] = updated_iso
+            _hydrate_session_reference_files(sess)
 
             meta = _extract_metadata(sess)
             serialized = json.dumps(sess, ensure_ascii=False)
