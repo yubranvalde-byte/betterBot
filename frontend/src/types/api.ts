@@ -35,6 +35,8 @@ export interface ReadinessScores {
   has_trigger_or_context?: number;
   has_output_contract?: number;
   needs_auxiliary_files?: number | boolean | string;
+  needs_scripts?: number | boolean | string;
+  is_repo_context?: number | boolean | string;
   ready_to_compile?: number;
   latency_ms?: number;
   error?: string;
@@ -100,6 +102,8 @@ export interface FactoryState {
   iteration_count: number;
   target_type: TargetType | string;
   slug_name: string;
+  needs_scripts?: boolean;
+  is_repo_context?: boolean;
   reference_files: Record<string, string>;
   rubric_scores: RubricScores;
   readiness_scores: ReadinessScores;
@@ -119,6 +123,8 @@ export interface SessionData {
   active_node: NodeId | null;
   target_type: TargetType | string;
   slug_name: string;
+  needs_scripts?: boolean;
+  is_repo_context?: boolean;
   reference_files: Record<string, string>;
   rubric_scores: RubricScores;
   readiness_scores: ReadinessScores;

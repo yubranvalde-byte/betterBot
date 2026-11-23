@@ -64,6 +64,8 @@ class FactoryState(TypedDict, total=False):
     # BetterBot 2.0 Hybrid Agent & Skill Compiler State
     target_type: Annotated[str, replace_value]
     slug_name: Annotated[str, replace_value]
+    needs_scripts: Annotated[bool, replace_value]
+    is_repo_context: Annotated[bool, replace_value]
     final_prompt: Annotated[str, replace_value]
     reference_files: Annotated[Dict[str, str], replace_value]
     rubric_scores: Annotated[Dict[str, float], replace_value]
@@ -198,6 +200,76 @@ def is_needs_auxiliary_files(
         except (TypeError, ValueError):
             return False
     return has_blueprint_refs(fallback_xml)
+
+
+def has_blueprint_scripts(xml_text: str) -> bool:
+    """Returns True when the blueprint nominates `scripts/<name>.py` or `skills/<sub_slug>/scripts/<name>.py`."""
+    if not xml_text:
+        return False
+    return bool(
+        re.search(
+            r"(?:skills/[a-zA-Z0-9_-]+/)?scripts/[a-zA-Z0-9_./-]+\.py\b",
+            xml_text,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def is_needs_scripts(
+    readiness_scores: Optional[Dict[str, Any]],
+    target_type: str = "SYSTEM_PROMPT",
+    fallback_xml: str = "",
+) -> bool:
+    """Resolves whether Gate 1 or the blueprint flagged deterministic `scripts/*.py` generation (never for SYSTEM_PROMPT)."""
+    normalized_target = (target_type or "SYSTEM_PROMPT").strip().upper()
+    if normalized_target == "SYSTEM_PROMPT":
+        return False
+    if (
+        isinstance(readiness_scores, dict)
+        and "needs_scripts" in readiness_scores
+        and readiness_scores["needs_scripts"] is not None
+    ):
+        val = readiness_scores["needs_scripts"]
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.strip().lower() in ("yes", "true", "1")
+        try:
+            return float(val) >= 0.65
+        except (TypeError, ValueError):
+            return False
+    return has_blueprint_scripts(fallback_xml)
+
+
+def is_repo_context_mode(
+    readiness_scores: Optional[Dict[str, Any]],
+    fallback_xml: str = "",
+    ref_files: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Resolves whether Gate 1 or artifact context indicates a repo-level coding-agent contract (`AGENTS.md`)."""
+    if isinstance(ref_files, dict) and "AGENTS.md" in ref_files:
+        return True
+    if (
+        isinstance(readiness_scores, dict)
+        and "is_repo_context" in readiness_scores
+        and readiness_scores["is_repo_context"] is not None
+    ):
+        val = readiness_scores["is_repo_context"]
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.strip().lower() in ("yes", "true", "1")
+        try:
+            return float(val) >= 0.65
+        except (TypeError, ValueError):
+            return False
+    return bool(
+        re.search(
+            r"\b(AGENTS\.md|CLAUDE\.md|Directory-as-Router)\b",
+            fallback_xml or "",
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def get_auxiliary_reference_paths(ref_files: Optional[Dict[str, str]]) -> List[str]:
@@ -655,10 +727,25 @@ def parse_deleted_artifacts(raw_text: str) -> List[str]:
     return deleted
 
 
+def _strip_python_code_fence(text: str) -> str:
+    """Defensively strips outer Markdown code fences (e.g. ```python ... ```) from .py artifact blocks."""
+    if not text:
+        return ""
+    cleaned = text.strip()
+    cleaned = re.sub(
+        r"^`{3,4}(?:python3?|py)?[ \t]*\r?\n",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\r?\n`{3,4}[ \t]*$", "", cleaned)
+    return cleaned.strip()
+
+
 def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
     """
     Splits `### FILE: <path>` sections from Construct/Upgrader outputs, supporting
-    flat (`references/...`) and nested (`skills/<slug>/...`) relative paths.
+    flat (`references/...`, `scripts/...`) and nested (`skills/<slug>/...`) relative paths.
     Auxiliary files are extracted into `reference_files` while the primary artifact
     (preserving any `<compilation_check>`) remains in `challenger_prompt`.
     """
@@ -692,6 +779,8 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
         file_content = parts[i + 1].strip() if i + 1 < len(parts) else ""
         if not file_path:
             continue
+        if file_path.endswith(".py"):
+            file_content = _strip_python_code_fence(file_content)
         all_files[file_path] = file_content
         reference_files[file_path] = file_content
 
@@ -701,7 +790,7 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
         primary_sections = [
             f"### FILE: {fp}\n{fc}"
             for fp, fc in all_files.items()
-            if fp in ("SYSTEM_PROMPT.md", "SKILL.md")
+            if fp in ("SYSTEM_PROMPT.md", "AGENTS.md", "SKILL.md")
         ]
         primary_body = "\n\n".join(primary_sections)
 
@@ -783,12 +872,16 @@ def node_helper(state: FactoryState):
             if float(readiness.get(key, 0.0)) < 0.80
         ]
         needs_refs = float(readiness.get("needs_auxiliary_files", 0.0)) >= 0.65
+        needs_scripts = is_needs_scripts(readiness, target_type=target_type)
+        is_repo_context = is_repo_context_mode(readiness)
 
         if turn_count >= 3 or (ready_prob >= 0.85 and turn_count >= 2):
             missing_fields_hint = (
                 f"Turn count: {turn_count}. Readiness score: {ready_prob:.2f}. "
                 f"Recommended TARGET_TYPE: {target_type}. "
-                f"Needs auxiliary references/: {needs_refs}."
+                f"Needs auxiliary references/: {needs_refs}. "
+                f"Needs helper scripts/: {needs_scripts}. "
+                f"Is repo context (AGENTS.md/CLAUDE.md): {is_repo_context}."
                 f"{suite_hint} "
                 "Compile the full <ARTIFACT_BLUEPRINT> XML immediately in this turn."
             )
@@ -797,11 +890,19 @@ def node_helper(state: FactoryState):
             missing_fields_hint = (
                 f"Turn count: {turn_count}/3. Recommended TARGET_TYPE: {target_type}. "
                 f"Dimensions with confidence < 0.80: {missing_str}. "
-                f"Needs auxiliary references/: {needs_refs}."
+                f"Needs auxiliary references/: {needs_refs}. "
+                f"Needs helper scripts/: {needs_scripts}. "
+                f"Is repo context (AGENTS.md/CLAUDE.md): {is_repo_context}."
                 f"{suite_hint} "
                 "Ask 1-2 targeted Hebrew clarification questions for missing dimensions before compiling."
             )
     else:
+        needs_scripts = (
+            False
+            if target_type == "SYSTEM_PROMPT"
+            else bool(state.get("needs_scripts", False))
+        )
+        is_repo_context = bool(state.get("is_repo_context", False))
         if turn_count >= 3:
             missing_fields_hint = (
                 f"Turn count: {turn_count}. Maximum interview turns reached. "
@@ -822,7 +923,12 @@ def node_helper(state: FactoryState):
     response, telemetry = _invoke_role_with_fallback(
         role="node_1_helper",
         prompt_template=prompt,
-        inputs={"user_input": user_input, "missing_fields_hint": missing_fields_hint},
+        inputs={
+            "user_input": user_input,
+            "missing_fields_hint": missing_fields_hint,
+            "needs_scripts": "True" if needs_scripts else "False",
+            "is_repo_context": "True" if is_repo_context else "False",
+        },
         thinking_level="low",
         model_overrides=state.get("model_overrides"),
     )
@@ -839,6 +945,8 @@ def node_helper(state: FactoryState):
         "challenger_xml": content,
         "readiness_scores": readiness,
         "target_type": target_type,
+        "needs_scripts": needs_scripts,
+        "is_repo_context": is_repo_context,
         "model_telemetry": {
             "node_1_helper": telemetry,
             "last_execution": telemetry,
@@ -849,6 +957,12 @@ def node_helper(state: FactoryState):
         update["target_type"] = meta["target_type"]
         if meta["slug_name"]:
             update["slug_name"] = meta["slug_name"]
+        update["needs_scripts"] = (
+            False
+            if meta["target_type"] == "SYSTEM_PROMPT"
+            else (needs_scripts or has_blueprint_scripts(content))
+        )
+        update["is_repo_context"] = is_repo_context or is_repo_context_mode(None, content)
 
     return update
 
@@ -867,6 +981,24 @@ def node_construct(state: FactoryState):
     needs_aux = is_needs_auxiliary_files(
         state.get("readiness_scores"), challenger_xml
     ) or has_blueprint_refs(challenger_xml)
+    needs_scripts = (
+        False
+        if meta["target_type"] == "SYSTEM_PROMPT"
+        else (
+            bool(state.get("needs_scripts"))
+            or is_needs_scripts(
+                state.get("readiness_scores"),
+                target_type=meta["target_type"],
+                fallback_xml=challenger_xml,
+            )
+        )
+    )
+
+    is_repo_context = bool(state.get("is_repo_context")) or is_repo_context_mode(
+        state.get("readiness_scores"),
+        fallback_xml=challenger_xml,
+        ref_files=state.get("reference_files"),
+    )
 
     prompt = PromptTemplate.from_template(CONSTRUCT_PROMPT)
     response, telemetry = _invoke_role_with_fallback(
@@ -875,6 +1007,8 @@ def node_construct(state: FactoryState):
         inputs={
             "challenger_xml": challenger_xml,
             "needs_auxiliary_files": "True" if needs_aux else "False",
+            "needs_scripts": "True" if needs_scripts else "False",
+            "is_repo_context": "True" if is_repo_context else "False",
         },
         thinking_level=thinking_level,
         model_overrides=state.get("model_overrides"),
@@ -888,6 +1022,8 @@ def node_construct(state: FactoryState):
         "challenger_prompt": primary_prompt,
         "reference_files": ref_files,
         "target_type": meta["target_type"],
+        "needs_scripts": needs_scripts,
+        "is_repo_context": is_repo_context or ("AGENTS.md" in ref_files),
         "linter_retries": 0,
         "model_telemetry": {
             "node_2_construct": telemetry,
@@ -946,6 +1082,23 @@ def node_upgrader(state: FactoryState):
     current_target = state.get("target_type") or extract_blueprint_meta(
         champion_xml
     ).get("target_type", "SYSTEM_PROMPT")
+    needs_scripts = (
+        False
+        if current_target == "SYSTEM_PROMPT"
+        else (
+            bool(state.get("needs_scripts"))
+            or is_needs_scripts(
+                state.get("readiness_scores"),
+                target_type=current_target,
+                fallback_xml=champion_xml,
+            )
+        )
+    )
+    is_repo_context = bool(state.get("is_repo_context")) or is_repo_context_mode(
+        state.get("readiness_scores"),
+        fallback_xml=champion_xml,
+        ref_files=state.get("reference_files"),
+    )
     prompt = PromptTemplate.from_template(UPGRADER_PROMPT)
     response, telemetry = _invoke_role_with_fallback(
         role="node_3_upgrader",
@@ -954,6 +1107,8 @@ def node_upgrader(state: FactoryState):
             "champion_xml": champion_xml,
             "champion_prompt": champion_prompt,
             "error_log": formatted_errors,
+            "needs_scripts": "True" if needs_scripts else "False",
+            "is_repo_context": "True" if is_repo_context else "False",
         },
         structured_schema=UpgraderOutput,
         thinking_level="medium",
@@ -985,12 +1140,16 @@ def node_upgrader(state: FactoryState):
         primary_prompt = base_prompt
     elif (
         meta["target_type"] == "HYBRID_BUNDLE"
-        and ("SYSTEM_PROMPT.md" in merged_refs or "SKILL.md" in merged_refs)
+        and (
+            "SYSTEM_PROMPT.md" in merged_refs
+            or "AGENTS.md" in merged_refs
+            or "SKILL.md" in merged_refs
+        )
         and primary_prompt.lstrip().startswith("### FILE:")
     ):
         rebuilt_sections = [
             f"### FILE: {fp}\n{merged_refs[fp]}"
-            for fp in ("SYSTEM_PROMPT.md", "SKILL.md")
+            for fp in ("SYSTEM_PROMPT.md", "AGENTS.md", "SKILL.md")
             if fp in merged_refs
         ]
         if rebuilt_sections:
@@ -1006,10 +1165,27 @@ def node_upgrader(state: FactoryState):
                 else rebuilt_body
             )
 
+    has_compiled_scripts = any(
+        k.endswith(".py") and (k.startswith("scripts/") or "/scripts/" in k)
+        for k in merged_refs
+    )
+    updated_needs_scripts = (
+        False
+        if meta["target_type"] == "SYSTEM_PROMPT"
+        else (
+            needs_scripts
+            or has_blueprint_scripts(response.updated_xml)
+            or has_compiled_scripts
+        )
+    )
+
     update: Dict[str, Any] = {
         "challenger_xml": response.updated_xml,
         "challenger_prompt": primary_prompt,
         "target_type": meta["target_type"],
+        "needs_scripts": updated_needs_scripts,
+        "is_repo_context": is_repo_context
+        or is_repo_context_mode(None, response.updated_xml, merged_refs),
         "reference_files": merged_refs,
         "is_manual_override": is_override,
         "model_telemetry": {
@@ -1503,6 +1679,8 @@ def run_factory():
         "linter_result": {},
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
+        "needs_scripts": False,
+        "is_repo_context": False,
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},

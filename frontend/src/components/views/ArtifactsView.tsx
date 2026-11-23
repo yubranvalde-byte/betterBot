@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   CaretDown,
   Check,
-  CheckCircle,
   CircleNotch,
   Code,
   Copy,
@@ -39,7 +38,8 @@ import { parseYamlFrontmatter } from '../../utils/frontmatter';
 import { decodeHtmlEntities } from '../../utils/text';
 import { CodeBlock } from '../common/CodeBlock';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
-import { GlassGaugeTube } from '../OpticalConduit';
+import { PrismBar } from '../PrismBar';
+import { Tooltip } from '../Tooltip';
 
 interface ArtifactsViewProps {
   session: SessionData | null;
@@ -265,7 +265,7 @@ export function ArtifactsView({
     resolvedFile === PRIMARY_FILE_KEY ? tree.primaryLabel : resolvedFile;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] flex-1 min-h-0 bg-porcelain/60 relative z-10">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] flex-1 min-h-0 relative z-10">
       {/* Right Main Column — Elevated Porcelain Document Card */}
       <section className="p-4 lg:p-6 flex flex-col min-h-0">
         <div className="card-porcelain rounded-[14px] flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -309,37 +309,43 @@ export function ArtifactsView({
             {/* Minimal Action Controls */}
             {activeTab === 'prompt' ? (
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  disabled={!hasAnyArtifact}
-                  onClick={handleCopyActive}
-                  className="prism-interactive h-8 px-2.5 rounded-md border border-hairline bg-surface disabled:opacity-40 text-xs text-ink inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Copy size={14} className="text-slate-ink" />
-                  <span>העתק</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={!hasAnyArtifact}
-                  onClick={onDownloadZip}
-                  className="btn-obsidian h-8 px-3.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <DownloadSimple size={14} weight="bold" />
-                  <span>הורד חבילה (.ZIP)</span>
-                </button>
-
-                <div className="relative" ref={overflowRef}>
+                <Tooltip content="העתק את תוכן הקובץ הפעיל" placement="bottom">
                   <button
                     type="button"
                     disabled={!hasAnyArtifact}
-                    aria-label="אפשרויות נוספות"
-                    aria-expanded={overflowOpen}
-                    onClick={() => setOverflowOpen((v) => !v)}
-                    className="prism-interactive h-8 w-8 rounded-md border border-hairline bg-surface disabled:opacity-40 text-ink inline-flex items-center justify-center cursor-pointer"
+                    onClick={handleCopyActive}
+                    className="prism-interactive h-8 px-2.5 rounded-md border border-hairline bg-surface disabled:opacity-40 text-xs text-ink inline-flex items-center gap-1.5 cursor-pointer"
                   >
-                    <DotsThree size={16} weight="bold" />
+                    <Copy size={14} className="text-slate-ink" />
+                    <span>העתק</span>
                   </button>
+                </Tooltip>
+
+                <Tooltip content="הורד חבילת התקנה מלאה (.ZIP)" placement="bottom">
+                  <button
+                    type="button"
+                    disabled={!hasAnyArtifact}
+                    onClick={onDownloadZip}
+                    className="btn-obsidian h-8 px-3.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <DownloadSimple size={14} weight="bold" />
+                    <span>הורד חבילה (.ZIP)</span>
+                  </button>
+                </Tooltip>
+
+                <div className="relative" ref={overflowRef}>
+                  <Tooltip content="אפשרויות תצוגה והורדה נוספות" placement="bottom">
+                    <button
+                      type="button"
+                      disabled={!hasAnyArtifact}
+                      aria-label="אפשרויות נוספות"
+                      aria-expanded={overflowOpen}
+                      onClick={() => setOverflowOpen((v) => !v)}
+                      className="prism-interactive h-8 w-8 rounded-md border border-hairline bg-surface disabled:opacity-40 text-ink inline-flex items-center justify-center cursor-pointer"
+                    >
+                      <DotsThree size={16} weight="bold" />
+                    </button>
+                  </Tooltip>
 
                   {overflowOpen && (
                     <div className="absolute left-0 top-9 z-30 w-48 rounded-md border border-hairline-strong bg-surface shadow-xl shadow-obsidian/8 py-1">
@@ -360,7 +366,7 @@ export function ArtifactsView({
                         className="w-full px-3 py-2 text-right text-xs text-ink hover:bg-hover flex items-center gap-2 cursor-pointer"
                       >
                         <FileArrowDown size={14} className="text-slate-ink" />
-                        <span>הורד .MD</span>
+                        <span>{resolvedFile.endsWith('.py') ? 'הורד .PY' : 'הורד .MD'}</span>
                       </button>
                     </div>
                   )}
@@ -371,15 +377,17 @@ export function ArtifactsView({
                 <span dir="ltr" className="font-mono text-xs text-muted">
                   V{parsedBp.version || '2.0'}
                 </span>
-                <button
-                  type="button"
-                  disabled={!rawXml}
-                  onClick={handleCopyXml}
-                  className="h-8 px-3 rounded-md border border-hairline bg-surface hover:bg-hover disabled:opacity-40 text-xs text-ink inline-flex items-center gap-1.5 canon-transition cursor-pointer"
-                >
-                  <Copy size={14} className="text-slate-ink" />
-                  <span>העתק XML</span>
-                </button>
+                <Tooltip content="העתק את קוד ה-XML Blueprint" placement="bottom">
+                  <button
+                    type="button"
+                    disabled={!rawXml}
+                    onClick={handleCopyXml}
+                    className="prism-interactive h-8 px-3 rounded-md border border-hairline bg-surface disabled:opacity-40 text-xs text-ink inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Copy size={14} className="text-slate-ink" />
+                    <span>העתק XML</span>
+                  </button>
+                </Tooltip>
               </div>
             )}
           </div>
@@ -437,43 +445,31 @@ export function ArtifactsView({
                   <div>
                     {/* Active File Sub-title */}
                     <div className="flex items-center justify-between gap-2 pb-4 mb-6 border-b border-hairline">
-                      <span dir="ltr" className="font-mono text-xs font-semibold text-obsidian">
-                        {activeFileDisplayLabel}
+                      <span dir="ltr" className="font-mono text-xs font-semibold text-obsidian inline-flex items-center gap-2">
+                        {resolvedFile.endsWith('.py') ? (
+                          <Code size={15} className="text-slate-ink shrink-0" />
+                        ) : null}
+                        <span>{activeFileDisplayLabel}</span>
                       </span>
-                      {showRawPrompt && (
+                      {resolvedFile.endsWith('.py') ? (
+                        <span
+                          className="font-mono text-[10px] px-2 py-0.5 rounded-sm border border-hairline bg-recessed text-obsidian"
+                          dir="ltr"
+                        >
+                          PYTHON 3 STDLIB SCRIPT
+                        </span>
+                      ) : showRawPrompt ? (
                         <span className="font-mono text-[11px] text-muted" dir="ltr">
                           RAW SOURCE VIEW
                         </span>
-                      )}
+                      ) : null}
                     </div>
 
-                    {/* Collapsible <compilation_check> */}
-                    {session?.compilation_check && (
-                      <details className="mb-6 border border-hairline rounded-md bg-recessed/60">
-                        <summary className="px-4 py-2.5 text-xs font-medium text-ink cursor-pointer select-none flex items-center justify-between gap-2">
-                          <span className="inline-flex items-center gap-2">
-                            <CheckCircle size={14} className="text-emerald shrink-0" />
-                            <span>
-                              בדיקת אימות עצמית של המהדר (
-                              <code dir="ltr" className="font-mono text-[11px]">
-                                &lt;compilation_check&gt;
-                              </code>
-                              )
-                            </span>
-                          </span>
-                          <CaretDown size={13} className="text-muted" />
-                        </summary>
-                        <pre
-                          dir="ltr"
-                          className="border-t border-hairline p-4 font-mono text-xs text-slate-ink whitespace-pre-wrap overflow-x-auto bg-porcelain"
-                        >
-                          {session.compilation_check}
-                        </pre>
-                      </details>
-                    )}
-
-                    {showRawPrompt ? (
-                      <CodeBlock code={rawContent} lang={detectCodeLang(resolvedFile)} />
+                    {showRawPrompt || /\.(py|json|ya?ml|xml)$/i.test(resolvedFile) ? (
+                      <CodeBlock
+                        code={showRawPrompt ? rawContent : displayedContent}
+                        lang={detectCodeLang(resolvedFile)}
+                      />
                     ) : (
                       <>
                         {parsedFrontmatter.frontmatter && (
@@ -666,8 +662,8 @@ export function ArtifactsView({
         </div>
       </section>
 
-      {/* Left Sticky Margin Rail — File Tree, Mini Rubric Spectrum & Telemetry */}
-      <aside className="bg-porcelain lg:border-r lg:border-hairline p-6 lg:sticky lg:top-[58px] lg:h-[calc(100vh-58px)] lg:overflow-y-auto flex flex-col">
+      {/* Left Sticky Margin Rail — Solid #FFFFFF File Tree, Mini Rubric Spectrum & Telemetry */}
+      <aside className="bg-white lg:border-r lg:border-[rgba(17,18,22,0.08)] p-6 lg:sticky lg:top-[58px] lg:h-[calc(100vh-58px)] lg:overflow-y-auto flex flex-col shadow-[0_2px_6px_rgba(17,18,22,0.02)]">
         {/* File Tree */}
         <div>
           <div className="flex items-center justify-between gap-2 mb-3">
@@ -685,54 +681,73 @@ export function ArtifactsView({
           </div>
 
           {!hasAnyArtifact ? (
-            <div className="border border-hairline rounded-md bg-surface/60 px-3 py-4 text-xs text-muted text-center">
+            <div className="border border-hairline rounded-md bg-porcelain/60 px-3 py-4 text-xs text-muted text-center">
               אין קבצים להצגה עדיין
             </div>
           ) : (
             <div dir="ltr" className="space-y-1.5 text-left">
               {tree.showPrimary && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onChangeFile(PRIMARY_FILE_KEY);
-                    if (activeTab !== 'prompt') onChangeTab('prompt');
-                  }}
-                  className={`prism-interactive w-full px-2.5 py-2 rounded-sm border text-xs font-mono flex items-center justify-between gap-2 cursor-pointer ${
-                    resolvedFile === PRIMARY_FILE_KEY
-                      ? 'bg-surface border-hairline shadow-xs border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
-                      : 'bg-surface/60 border-transparent hover:bg-surface text-slate-ink'
-                  }`}
-                >
-                  <span className="inline-flex items-center gap-2 truncate">
-                    <FileText size={14} className="shrink-0 text-slate-ink" />
-                    <span className="truncate">{tree.primaryLabel}</span>
-                  </span>
-                  <span className="text-[10px] text-muted shrink-0">PRIMARY</span>
-                </button>
-              )}
-
-              {tree.rootExtraKeys.map((relPath) => {
-                const isActive = resolvedFile === relPath;
-                return (
+                <Tooltip content={tree.primaryLabel} dir="ltr" placement="right" className="w-full">
                   <button
-                    key={relPath}
                     type="button"
                     onClick={() => {
-                      onChangeFile(relPath);
+                      onChangeFile(PRIMARY_FILE_KEY);
                       if (activeTab !== 'prompt') onChangeTab('prompt');
                     }}
                     className={`prism-interactive w-full px-2.5 py-2 rounded-sm border text-xs font-mono flex items-center justify-between gap-2 cursor-pointer ${
-                      isActive
-                        ? 'bg-surface border-hairline shadow-xs border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
-                        : 'bg-surface/60 border-transparent hover:bg-surface text-slate-ink'
+                      resolvedFile === PRIMARY_FILE_KEY
+                        ? 'bg-porcelain border-hairline shadow-xs border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
+                        : 'bg-porcelain/50 border-transparent hover:bg-porcelain text-slate-ink'
                     }`}
                   >
                     <span className="inline-flex items-center gap-2 truncate">
                       <FileText size={14} className="shrink-0 text-slate-ink" />
-                      <span className="truncate">{relPath}</span>
+                      <span className="truncate">{tree.primaryLabel}</span>
                     </span>
-                    <span className="text-[10px] text-muted shrink-0">REF</span>
+                    <span className="text-[10px] text-muted shrink-0">PRIMARY</span>
                   </button>
+                </Tooltip>
+              )}
+
+              {tree.rootExtraKeys.map((relPath) => {
+                const isActive = resolvedFile === relPath;
+                const isScript =
+                  relPath.startsWith('scripts/') ||
+                  relPath.includes('/scripts/') ||
+                  relPath.endsWith('.py');
+                const rootTag =
+                  relPath === 'SKILL.md'
+                    ? 'SKILL'
+                    : relPath === 'SYSTEM_PROMPT.md'
+                    ? 'PROMPT'
+                    : isScript
+                    ? 'SCRIPT'
+                    : 'REF';
+                return (
+                  <Tooltip key={relPath} content={relPath} dir="ltr" placement="right" className="w-full">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChangeFile(relPath);
+                        if (activeTab !== 'prompt') onChangeTab('prompt');
+                      }}
+                      className={`prism-interactive w-full px-2.5 py-2 rounded-sm border text-xs font-mono flex items-center justify-between gap-2 cursor-pointer ${
+                        isActive
+                          ? 'bg-porcelain border-hairline shadow-xs border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
+                          : 'bg-porcelain/50 border-transparent hover:bg-porcelain text-slate-ink'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2 truncate">
+                        {isScript ? (
+                          <Code size={14} className="shrink-0 text-slate-ink" />
+                        ) : (
+                          <FileText size={14} className="shrink-0 text-slate-ink" />
+                        )}
+                        <span className="truncate">{relPath}</span>
+                      </span>
+                      <span className="text-[10px] text-muted shrink-0">{rootTag}</span>
+                    </button>
+                  </Tooltip>
                 );
               })}
 
@@ -740,53 +755,66 @@ export function ArtifactsView({
                 const containsActive = group.files.includes(resolvedFile);
                 const isOpen = containsActive || !collapsedFolders.has(group.slug);
                 return (
-                  <div key={group.slug} className="border border-hairline rounded-md bg-surface/70 overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => toggleFolder(group.slug)}
-                      className="w-full px-2.5 py-2 text-xs font-mono text-obsidian flex items-center justify-between gap-2 hover:bg-hover canon-transition cursor-pointer"
-                    >
-                      <span className="inline-flex items-center gap-1.5 truncate">
-                        {isOpen ? (
-                          <FolderOpen size={14} className="text-obsidian shrink-0" />
-                        ) : (
-                          <Folder size={14} className="text-slate-ink shrink-0" />
-                        )}
-                        <span className="truncate">skills/{group.slug}/</span>
-                      </span>
-                      <span className="text-[10px] tabular-nums text-slate-ink bg-recessed px-1.5 rounded-sm shrink-0">
-                        {group.files.length}
-                      </span>
-                    </button>
+                  <div key={group.slug} className="border border-hairline rounded-md bg-white overflow-hidden">
+                    <Tooltip content={`skills/${group.slug}/`} dir="ltr" placement="right" className="w-full">
+                      <button
+                        type="button"
+                        onClick={() => toggleFolder(group.slug)}
+                        className="w-full px-2.5 py-2 text-xs font-mono text-obsidian flex items-center justify-between gap-2 hover:bg-hover canon-transition cursor-pointer"
+                      >
+                        <span className="inline-flex items-center gap-1.5 truncate">
+                          {isOpen ? (
+                            <FolderOpen size={14} className="text-obsidian shrink-0" />
+                          ) : (
+                            <Folder size={14} className="text-slate-ink shrink-0" />
+                          )}
+                          <span className="truncate">skills/{group.slug}/</span>
+                        </span>
+                        <span className="text-[10px] tabular-nums text-slate-ink bg-recessed px-1.5 rounded-sm shrink-0">
+                          {group.files.length}
+                        </span>
+                      </button>
+                    </Tooltip>
 
                     {isOpen && (
                       <div className="border-t border-hairline divide-y divide-hairline/70">
                         {group.files.map((relPath) => {
                           const subPath = relPath.slice(`skills/${group.slug}/`.length);
                           const isMainSkill = subPath === 'SKILL.md';
+                          const isScript = subPath.startsWith('scripts/') || subPath.endsWith('.py');
                           const roleTag = isMainSkill
                             ? 'SKILL'
                             : subPath.startsWith('references/')
                             ? 'REF'
+                            : isScript
+                            ? 'SCRIPT'
                             : 'FILE';
                           const isActive = resolvedFile === relPath;
                           return (
-                            <button
-                              key={relPath}
-                              type="button"
-                              onClick={() => {
-                                onChangeFile(relPath);
-                                if (activeTab !== 'prompt') onChangeTab('prompt');
-                              }}
-                              className={`prism-interactive w-full pl-5 pr-2.5 py-1.5 text-xs font-mono flex items-center justify-between gap-2 border border-transparent cursor-pointer ${
-                                isActive
-                                  ? 'bg-surface border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
-                                  : 'bg-porcelain/50 hover:bg-surface text-slate-ink'
-                              }`}
-                            >
-                              <span className="truncate">{subPath}</span>
-                              <span className="text-[10px] text-muted shrink-0">{roleTag}</span>
-                            </button>
+                            <Tooltip key={relPath} content={relPath} dir="ltr" placement="right" className="w-full">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onChangeFile(relPath);
+                                  if (activeTab !== 'prompt') onChangeTab('prompt');
+                                }}
+                                className={`prism-interactive w-full pl-5 pr-2.5 py-1.5 text-xs font-mono flex items-center justify-between gap-2 border border-transparent cursor-pointer ${
+                                  isActive
+                                    ? 'bg-porcelain border-r-[2.5px] border-r-obsidian text-obsidian font-semibold'
+                                    : 'bg-white hover:bg-porcelain/70 text-slate-ink'
+                                }`}
+                              >
+                                <span className="inline-flex items-center gap-1.5 truncate">
+                                  {isScript ? (
+                                    <Code size={13} className="shrink-0 text-slate-ink" />
+                                  ) : (
+                                    <FileText size={13} className="shrink-0 text-slate-ink" />
+                                  )}
+                                  <span className="truncate">{subPath}</span>
+                                </span>
+                                <span className="text-[10px] text-muted shrink-0">{roleTag}</span>
+                              </button>
+                            </Tooltip>
                           );
                         })}
                       </div>
@@ -800,36 +828,36 @@ export function ArtifactsView({
 
         {/* Mini Rubric Spectrum Widget (Clickable -> 03 / בקרת איכות) */}
         {miniRubricDims.length > 0 && (
-          <button
-            type="button"
-            onClick={onNavigateToQa}
-            title="לחץ למעבר לבקרת איכות (03 / בקרת איכות)"
-            className="prism-interactive mt-6 w-full text-right card-porcelain rounded-md p-3.5 cursor-pointer"
-          >
-            <div className="flex items-center justify-between gap-2 mb-2.5">
-              <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted" dir="ltr">
-                RUBRIC SPECTRUM ({miniRubricDims.length}D)
-              </span>
-              <span className="font-mono text-xs font-semibold tabular-nums text-emerald" dir="ltr">
-                {weightedPct}%
-              </span>
-            </div>
-            <div className="space-y-2">
-              {miniRubricDims.map((dim) => {
-                const pct = Math.max(0, Math.min(100, Math.round((dim.val / 5) * 100)));
-                const variant = dim.val >= 4.2 ? 'prism' : dim.val >= 3.8 ? 'emerald' : 'amber';
-                return (
-                  <div key={dim.key} dir="ltr" className="grid grid-cols-[54px_1fr_28px] items-center gap-2">
-                    <span className="font-mono text-[10px] text-slate-ink truncate">{dim.label}</span>
-                    <GlassGaugeTube percent={pct} variant={variant} height="xs" />
-                    <span className="font-mono text-[10px] tabular-nums text-muted text-right">
-                      {dim.val.toFixed(1)}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
-          </button>
+          <Tooltip content="לחץ למעבר לבקרת איכות (03 / בקרת איכות)" placement="top" className="w-full mt-6">
+            <button
+              type="button"
+              onClick={onNavigateToQa}
+              className="prism-interactive w-full text-right card-porcelain rounded-md p-3.5 cursor-pointer"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2.5">
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted" dir="ltr">
+                  RUBRIC SPECTRUM ({miniRubricDims.length}D)
+                </span>
+                <span className="font-mono text-xs font-semibold tabular-nums text-emerald" dir="ltr">
+                  {weightedPct}%
+                </span>
+              </div>
+              <div className="space-y-2.5">
+                {miniRubricDims.map((dim) => {
+                  const pct = Math.max(0, Math.min(100, Math.round((dim.val / 5) * 100)));
+                  return (
+                    <div key={dim.key} dir="ltr" className="grid grid-cols-[54px_1fr_28px] items-center gap-2">
+                      <span className="font-mono text-[10px] text-slate-ink truncate">{dim.label}</span>
+                      <PrismBar value={pct} variant={dim.val < 3.0 ? 'warning' : 'prism'} />
+                      <span className="font-mono text-[10px] tabular-nums text-muted text-right">
+                        {dim.val.toFixed(1)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </button>
+          </Tooltip>
         )}
 
         {/* Aligned Telemetry Metadata */}

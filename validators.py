@@ -5,18 +5,21 @@ Uses Python stdlib only.
 
 from __future__ import annotations
 
+import ast
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SUITE_SKILL_RE = re.compile(r"^skills/([^/]+)/SKILL\.md$")
+_SUITE_SCRIPT_RE = re.compile(r"^skills/[^/]+/scripts/.+$")
 _REF_PATH_RE = re.compile(
-    r"(?<![a-zA-Z0-9_./-])((?:skills/[a-zA-Z0-9_-]+/)?references/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)"
+    r"(?<![a-zA-Z0-9_./-])((?:skills/[a-zA-Z0-9_-]+/)?(?:references|scripts)/[a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+)"
 )
 _CORE_ENTRYPOINTS = frozenset(
     {
         "SKILL.md",
         "SYSTEM_PROMPT.md",
+        "AGENTS.md",
         "blueprint.xml",
         "BETTERBOT_INSTALL.md",
     }
@@ -231,11 +234,19 @@ def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
             _validate_skill_frontmatter("SKILL.md", skill_content, errors)
             skill_docs.append(("SKILL.md", skill_content, None))
 
-        sys_content = valid_refs.get("SYSTEM_PROMPT.md") or _extract_file_section(
-            primary_prompt, "SYSTEM_PROMPT.md"
+        sys_content = (
+            valid_refs.get("SYSTEM_PROMPT.md")
+            or valid_refs.get("AGENTS.md")
+            or _extract_file_section(primary_prompt, "SYSTEM_PROMPT.md")
+            or _extract_file_section(primary_prompt, "AGENTS.md")
         )
         if sys_content:
-            skill_docs.append(("SYSTEM_PROMPT.md", sys_content, None))
+            sys_label = (
+                "AGENTS.md"
+                if (valid_refs.get("AGENTS.md") or _extract_file_section(primary_prompt, "AGENTS.md"))
+                else "SYSTEM_PROMPT.md"
+            )
+            skill_docs.append((sys_label, sys_content, None))
 
     elif target_type == "SKILL_SUITE":
         suite_skills: List[Tuple[str, str]] = []
@@ -264,16 +275,25 @@ def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
             skill_docs.append((rel_path, content, sub_slug))
 
     else:  # SYSTEM_PROMPT or fallback
+        for rel_path in sorted(valid_refs.keys()):
+            if (
+                rel_path.startswith("scripts/")
+                or _SUITE_SCRIPT_RE.match(rel_path)
+                or rel_path.endswith(".py")
+            ):
+                errors.append(
+                    f"SYSTEM_PROMPT targets forbid executable scripts (`{rel_path}`)."
+                )
         if valid_refs and primary_prompt.strip():
             skill_docs.append(("SYSTEM_PROMPT.md", _strip_wrapper(primary_prompt), None))
 
-    # 3. Broken References & Orphan Auxiliary Files
+    # 3. Broken References & Orphan Auxiliary/Script Files
     referenced_keys: Set[str] = set()
     valid_ref_key_set = set(valid_refs.keys())
 
     for owner_label, doc_content, sub_slug in skill_docs:
         for ref in _extract_reference_paths(doc_content):
-            if sub_slug and ref.startswith("references/"):
+            if sub_slug and (ref.startswith("references/") or ref.startswith("scripts/")):
                 scoped_ref = f"skills/{sub_slug}/{ref}"
                 if scoped_ref in valid_ref_key_set:
                     referenced_keys.add(scoped_ref)
@@ -298,6 +318,32 @@ def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
         if rel_path not in referenced_keys:
             errors.append(
                 f"Orphan file in reference_files: '{rel_path}' is not referenced by any SKILL.md."
+            )
+
+    # 4. Deterministic Python AST Syntax Validation for scripts/*.py
+    for rel_path in sorted(valid_ref_key_set):
+        is_script_path = rel_path.startswith("scripts/") or bool(
+            _SUITE_SCRIPT_RE.match(rel_path)
+        )
+        if not (is_script_path and rel_path.endswith(".py")):
+            continue
+        script_src = (valid_refs.get(rel_path) or "").strip()
+        if not script_src:
+            errors.append(
+                f"Empty Python script '{rel_path}': scripts/*.py must contain valid executable Python 3 stdlib code."
+            )
+            continue
+        try:
+            ast.parse(script_src, filename=rel_path)
+        except SyntaxError as exc:
+            line_info = f"line {exc.lineno}" + (
+                f", col {exc.offset}" if exc.offset else ""
+            )
+            bad_line = (exc.text or "").strip()
+            snippet = f" near `{bad_line}`" if bad_line else ""
+            errors.append(
+                f"Python SyntaxError in '{rel_path}' ({line_info}: {exc.msg}{snippet}). "
+                f"Re-emit a syntactically valid Python 3 stdlib `### FILE: {rel_path}` block."
             )
 
     passed = len(errors) == 0

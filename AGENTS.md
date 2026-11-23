@@ -27,9 +27,9 @@
 
 ### Compilation Targets & Graph Pipeline (`main.py`, `prompts.py`)
 - `VALID_TARGET_TYPES`: `SKILL_PACKAGE`, `SYSTEM_PROMPT`, `HYBRID_BUNDLE`, `SKILL_SUITE` (2–4 orthogonal atomic skills under `skills/<sub_slug>/SKILL.md`).
-- **Gate 1 (`HELPER_READINESS_QUESTIONS`):** Enforces the Orthogonality Rule (default tightly coupled workflows to single-skill targets) and caps interviews at 3 turns before `<ARTIFACT_BLUEPRINT>`.
-- **Gate 1.5 (`gate_1_5_linter` in `validators.py`):** Zero-token stdlib linter between `node_2_construct`/`node_3_upgrader` and Gate 2 checking YAML frontmatter, broken/orphan references (`SKILL_SUITE` resolves relative `references/*` to `skills/<sub_slug>/references/*`), `SKILL_SUITE` topology (2–4 slugs), and path safety. Capped at `MAX_LINTER_RETRIES = 1` via `state["linter_retries"]` without incrementing `iteration_count` (`MAX_QA_ITERATIONS = 2` remains strictly reserved for Gate 2).
-- **Delta-Patching (`node_3_upgrader`):** Emits only modified/new `### FILE: <path>` blocks and optional `### DELETE: <path>` lines; preserves untouched files in `state["reference_files"]`.
+- **Gate 1 (`HELPER_READINESS_QUESTIONS`):** Enforces the Orthogonality Rule (default tightly coupled workflows to single-skill targets), computes `needs_scripts` (`True` only for deterministic mechanical tasks offloaded to Python 3 stdlib `scripts/*.py`; always `False` for `SYSTEM_PROMPT`) and `is_repo_context` (`True` for repo-level coding-agent `AGENTS.md`/`CLAUDE.md` contracts without adding a 5th `target_type`), and caps interviews at 3 turns before `<ARTIFACT_BLUEPRINT>`.
+- **Gate 1.5 (`gate_1_5_linter` in `validators.py`):** Zero-token stdlib linter between `node_2_construct`/`node_3_upgrader` and Gate 2 checking YAML frontmatter, `ast.parse()` syntax on `scripts/*.py` (`skills/<sub_slug>/scripts/*.py`), broken/orphan `references/*` and `scripts/*` paths (`SKILL_SUITE` resolves relative `references/*` and `scripts/*` to `skills/<sub_slug>/...`), `SKILL_SUITE` topology (2–4 slugs), and path safety. Capped at `MAX_LINTER_RETRIES = 1` via `state["linter_retries"]` without incrementing `iteration_count` (`MAX_QA_ITERATIONS = 2` remains strictly reserved for Gate 2).
+- **Delta-Patching (`node_3_upgrader`):** Emits only modified/new `### FILE: <path>` blocks and optional `### DELETE: <path>` lines; preserves untouched files in `state["reference_files"]` and defensively strips outer Markdown code fences from `.py` files.
 
 ### Model Routing & Budgets (`main.py`, `render.yaml`)
 - `FAST_MODEL` = `gemini-4-hydrogen` (`thinking_level="low"` for `node_1_helper` and `betty`).
@@ -53,8 +53,8 @@
 - All 6 base keys + `trigger_deconfliction` MUST stay synchronized across `prompts.py`, `frontend/src/components/views/QaView.tsx`, and `frontend/src/types/api.ts`.
 
 ### Export Contract (`server.py`)
-- `GET /api/sessions/{session_id}/download` packages a `.ZIP` archive rooted cleanly under `<slug_name>/` (preserving nested `references/*` and `skills/<sub_slug>/*`).
-- `build_install_guide_md` generates `<slug_name>/BETTERBOT_INSTALL.md` deterministically (`0` LLM calls), **never** named `README.md` (to avoid overwriting target repo docs), and excludes `blueprint.xml` and `BETTERBOT_INSTALL.md` from runtime installation directories.
+- `GET /api/sessions/{session_id}/download` packages a `.ZIP` archive rooted cleanly under `<slug_name>/` (preserving nested `references/*`, `scripts/*.py`, and `skills/<sub_slug>/*`); when `is_repo_context` is `True`, exports the root contract as `<slug_name>/AGENTS.md` instead of `SYSTEM_PROMPT.md`.
+- `build_install_guide_md` generates `<slug_name>/BETTERBOT_INSTALL.md` deterministically (`0` LLM calls), **never** named `README.md` (to avoid overwriting target repo docs), notes bundled Python 3 stdlib-only `scripts/` (zero `pip install` dependencies) when `.py` files are present, includes Do-No-Harm merge/overwrite protection when `is_repo_context` / `AGENTS.md` is active, and excludes `blueprint.xml` and `BETTERBOT_INSTALL.md` from runtime installation directories.
 
 ## 4. Verification Protocol
 

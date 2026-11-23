@@ -4,6 +4,7 @@ import type { NodeId, SessionData, ViewId } from '../../types/api';
 import { getBestPrompt } from '../../utils/artifacts';
 import { decodeHtmlEntities } from '../../utils/text';
 import { MicroConduitConnector, type ConduitState } from '../OpticalConduit';
+import { Tooltip } from '../Tooltip';
 
 interface TopNavBarProps {
   activeView: ViewId;
@@ -114,7 +115,7 @@ export function TopNavBar({
   ];
 
   return (
-    <header className="sticky top-0 z-30 h-[58px] bg-surface/90 backdrop-blur-md border-b border-hairline px-4 lg:px-6 flex items-center justify-between gap-3">
+    <header className="sticky top-0 z-30 h-[58px] bg-white border-b border-[rgba(17,18,22,0.08)] shadow-[0_1px_2px_rgba(17,18,22,0.02)] px-4 lg:px-6 flex items-center justify-between gap-3">
       {/* Right (RTL start): Wordmark + Live Telemetry Conduit Pill + Session Selector */}
       <div className="flex items-center gap-2.5 min-w-0 shrink-0">
         <span className="font-display text-xl font-bold tracking-[-0.025em] text-obsidian leading-none">
@@ -153,25 +154,26 @@ export function TopNavBar({
           <span>{telemetryPill.text}</span>
         </div>
 
-        <button
-          type="button"
-          onClick={onToggleHistory}
-          aria-haspopup="dialog"
-          aria-expanded={isHistoryOpen}
-          title="בחירת סשן וספריית היסטוריית יצירות"
-          className={`prism-interactive h-8 rounded-md border px-2.5 text-xs inline-flex items-center gap-2 max-w-[180px] xl:max-w-[230px] cursor-pointer ${
-            isHistoryOpen
-              ? 'border-obsidian bg-surface text-obsidian shadow-xs'
-              : 'border-hairline bg-surface hover:bg-porcelain text-ink'
-          }`}
-        >
-          <ClockCounterClockwise size={14} className="text-slate-ink shrink-0" />
-          <span className="truncate font-medium">{decodedTitle}</span>
-          <span className="font-mono text-[11px] tabular-nums bg-surface border border-hairline px-1.5 rounded-sm text-slate-ink shrink-0">
-            {sessionCount}
-          </span>
-          <CaretDown size={12} className="text-muted shrink-0" />
-        </button>
+        <Tooltip content="בחירת סשן וספריית היסטוריית יצירות" placement="bottom">
+          <button
+            type="button"
+            onClick={onToggleHistory}
+            aria-haspopup="dialog"
+            aria-expanded={isHistoryOpen}
+            className={`prism-interactive h-8 rounded-md border px-2.5 text-xs inline-flex items-center gap-2 max-w-[180px] xl:max-w-[230px] cursor-pointer ${
+              isHistoryOpen
+                ? 'border-obsidian bg-surface text-obsidian shadow-xs'
+                : 'border-hairline bg-surface hover:bg-porcelain text-ink'
+            }`}
+          >
+            <ClockCounterClockwise size={14} className="text-slate-ink shrink-0" />
+            <span className="truncate font-medium">{decodedTitle}</span>
+            <span className="font-mono text-[11px] tabular-nums bg-surface border border-hairline px-1.5 rounded-sm text-slate-ink shrink-0">
+              {sessionCount}
+            </span>
+            <CaretDown size={12} className="text-muted shrink-0" />
+          </button>
+        </Tooltip>
       </div>
 
       {/* Center: 4 Numbered Workflow Tabs Linked by Micro-Conduits */}
@@ -203,10 +205,9 @@ export function TopNavBar({
                 <span>{tab.label}</span>
 
                 {tab.id === 'view-artifacts' && isPassed && (
-                  <span
-                    title="PASS — מאושר"
-                    className="w-1.5 h-1.5 rounded-full bg-emerald shrink-0"
-                  />
+                  <Tooltip content="PASS — מאושר" placement="bottom">
+                    <span className="w-2 h-2 rounded-full bg-emerald shrink-0" />
+                  </Tooltip>
                 )}
 
                 {tab.id === 'view-artifacts' && !isPassed && notifyTone && (
@@ -255,47 +256,50 @@ export function TopNavBar({
 
       {/* Left (RTL end): Obsidian +New Agent, MASTER/Sync, Betty */}
       <div className="flex items-center gap-2 shrink-0">
-        <button
-          type="button"
-          onClick={onNewSession}
-          disabled={isStreaming}
-          title="פתח סשן חדש"
-          className="btn-obsidian h-8 rounded-md px-3.5 text-xs lg:text-sm font-medium inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-        >
-          <Plus size={14} weight="bold" />
-          <span>סוכן חדש</span>
-        </button>
+        <Tooltip content="פתח סשן חדש" placement="bottom">
+          <button
+            type="button"
+            onClick={onNewSession}
+            disabled={isStreaming}
+            className="btn-obsidian h-8 rounded-md px-3.5 text-xs lg:text-sm font-medium inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            <Plus size={14} weight="bold" />
+            <span>סוכן חדש</span>
+          </button>
+        </Tooltip>
 
-        <button
-          type="button"
-          onClick={onOpenSyncModal}
-          title="סנכרון מרחב עבודה, מפתח Master וגיבוי JSON"
-          className="prism-interactive h-8 rounded-md border border-hairline bg-surface px-2.5 font-mono text-xs text-ink inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-        >
-          {isMasterMode && (
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald shrink-0" aria-hidden="true" />
-          )}
-          <Key size={13} className="text-slate-ink shrink-0" />
-          <span>{isMasterMode ? 'MASTER' : 'סנכרון'}</span>
-        </button>
+        <Tooltip content="סנכרון מרחב עבודה, מפתח Master וגיבוי JSON" placement="bottom">
+          <button
+            type="button"
+            onClick={onOpenSyncModal}
+            className="prism-interactive h-8 rounded-md border border-hairline bg-surface px-2.5 font-mono text-xs text-ink inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+          >
+            {isMasterMode && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald shrink-0" aria-hidden="true" />
+            )}
+            <Key size={13} className="text-slate-ink shrink-0" />
+            <span>{isMasterMode ? 'MASTER' : 'סנכרון'}</span>
+          </button>
+        </Tooltip>
 
-        <button
-          type="button"
-          onClick={onToggleBetty}
-          aria-expanded={isBettyOpen}
-          title="פתח / סגור את בטי — יועצת AI ותמיכה טכנית"
-          className={`prism-interactive h-8 rounded-md border px-2.5 text-xs lg:text-sm inline-flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-            isBettyOpen
-              ? 'border-obsidian bg-recessed text-obsidian font-medium prism-aura'
-              : 'border-hairline bg-surface text-ink'
-          }`}
-        >
-          <span
-            aria-hidden="true"
-            className="w-1.5 h-1.5 rounded-full bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach shrink-0"
-          />
-          <span>בטי • יועצת</span>
-        </button>
+        <Tooltip content="פתח / סגור את בטי — יועצת AI ותמיכה טכנית" placement="bottom">
+          <button
+            type="button"
+            onClick={onToggleBetty}
+            aria-expanded={isBettyOpen}
+            className={`prism-interactive h-8 rounded-md border px-2.5 text-xs lg:text-sm inline-flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              isBettyOpen
+                ? 'border-obsidian bg-recessed text-obsidian font-medium prism-aura'
+                : 'border-hairline bg-surface text-ink'
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className="w-1.5 h-1.5 rounded-full bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach shrink-0"
+            />
+            <span>בטי • יועצת</span>
+          </button>
+        </Tooltip>
       </div>
     </header>
   );

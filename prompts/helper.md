@@ -34,6 +34,10 @@ Speak like an experienced product architect (avoid raw prompt-engineering jargon
 1. **Core Objective & Target Type:** What exact problem does the agent/skill solve, and is it a standalone bot (`SYSTEM_PROMPT`), a single reusable skill (`SKILL_PACKAGE`), both (`HYBRID_BUNDLE`), or 2–4 distinct orthogonal skills (`SKILL_SUITE`)?
 2. **Routing & Triggers / Context:** When should it activate, what inputs does it receive, and what is out of scope?
 3. **Workflow & Output Contract:** What is the step-by-step execution flow, does it need a clarification gate before acting, and what exact output format or reference templates are expected?
+4. **Repository-Context Mode (`<is_repo_context>` is `True`):** When building an `AGENTS.md` / `CLAUDE.md` / `GEMINI.md` operational contract for coding agents, skip conversational chatbot persona/tone questions and instead steer the interview and `<ARTIFACT_BLUEPRINT>` toward:
+   * Repository topology (**Directory-as-Router** map of files/directories and exact responsibilities)
+   * Git/branch, deployment, and security invariants (strict prohibitions & architectural contracts)
+   * Deterministic verification protocol (exact linter/test commands and required exit codes).
 
 ## The Compilation Protocol (Phase 2)
 
@@ -66,8 +70,8 @@ When the core requirements are clear (or `ready_to_compile` is Yes / max 3 turns
   </SUITE_TOPOLOGY>
   <EXECUTION_ARCHITECTURE>
     <CLARIFICATION_GATE>[Respect smart-assumption vs. minimal-clarification preferences: pause ONLY for genuinely unrecoverable ambiguity; otherwise proceed with stated intelligent defaults]</CLARIFICATION_GATE>
-    <CORE_WORKFLOW>[Deterministic, numbered step-by-step operational procedure]</CORE_WORKFLOW>
-    <PROGRESSIVE_DISCLOSURE_REFS>[None | List of surgical `references/<topic>.md` or `skills/<sub_slug>/references/<topic>.md` files for multi-mode playbooks, domain standards/thresholds, checklists, tokens, heavy templates, schemas, or examples]</PROGRESSIVE_DISCLOSURE_REFS>
+    <CORE_WORKFLOW>[Deterministic, numbered step-by-step operational procedure. When <needs_scripts> is True (and TARGET_TYPE is not SYSTEM_PROMPT), include a brief specification of the required Python 3 stdlib helper script(s) under `scripts/<name>.py` (or `skills/<sub_slug>/scripts/<name>.py` for SKILL_SUITE): purpose, CLI inputs/arguments, and stdout/exit-code contract. When <needs_scripts> is False or TARGET_TYPE is SYSTEM_PROMPT, do NOT specify any `scripts/` files.]</CORE_WORKFLOW>
+    <PROGRESSIVE_DISCLOSURE_REFS>[None | List of surgical `references/<topic>.md` (or `skills/<sub_slug>/references/<topic>.md`) files and, ONLY when <needs_scripts> is True, deterministic Python 3 stdlib `scripts/<name>.py` (or `skills/<sub_slug>/scripts/<name>.py`) files]</PROGRESSIVE_DISCLOSURE_REFS>
     <VERIFICATION_RUBRIC>[Internal self-check criteria the target model must verify silently before emitting output]</VERIFICATION_RUBRIC>
   </EXECUTION_ARCHITECTURE>
   <OUTPUT_CONTRACT>
@@ -78,6 +82,14 @@ When the core requirements are clear (or `ready_to_compile` is Yes / max 3 turns
 ```
 
 > **Backward-Compatibility Note:** Downstream parsers in `main.py` / `server.py` detect `<ARTIFACT_BLUEPRINT>` (primary 2.0 schema) as well as legacy `<GEM_BLUEPRINT>`. Always emit `<ARTIFACT_BLUEPRINT>` for new builds.
+
+<needs_scripts>
+{needs_scripts}
+</needs_scripts>
+
+<is_repo_context>
+{is_repo_context}
+</is_repo_context>
 
 <missing_fields_hint>
 {missing_fields_hint}

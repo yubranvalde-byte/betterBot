@@ -88,9 +88,12 @@ export function getDownloadMdFilename(
 ): string {
   const resolvedFile = resolveActiveArtifactFile(session, activeFile);
   const targetType = String(session?.target_type || 'SYSTEM_PROMPT').trim().toUpperCase();
+  const isRepoContext = Boolean(session?.is_repo_context || session?.state?.is_repo_context);
   const defaultName =
     targetType === 'SKILL_PACKAGE'
       ? 'SKILL.md'
+      : isRepoContext
+      ? 'AGENTS.md'
       : `system_prompt_${session?.session_id || 'gem'}.md`;
   const suiteSkillMatch = resolvedFile.match(/^skills\/([^/]+)\/SKILL\.md$/i);
   if (resolvedFile !== PRIMARY_FILE_KEY) {
@@ -98,6 +101,20 @@ export function getDownloadMdFilename(
     return resolvedFile.split('/').pop() || defaultName;
   }
   return defaultName;
+}
+
+function getArtifactPathBucket(path: string): number {
+  if (path === 'SYSTEM_PROMPT.md' || path === 'AGENTS.md') return 0;
+  if (path === 'SKILL.md' || path.endsWith('/SKILL.md')) return 1;
+  if (path.startsWith('references/') || path.includes('/references/')) return 2;
+  if (path.startsWith('scripts/') || path.includes('/scripts/') || path.endsWith('.py')) return 3;
+  return 4;
+}
+
+function compareArtifactPaths(a: string, b: string): number {
+  const bucketDiff = getArtifactPathBucket(a) - getArtifactPathBucket(b);
+  if (bucketDiff !== 0) return bucketDiff;
+  return a.localeCompare(b);
 }
 
 export function buildArtifactTree(session: SessionData | null | undefined): ArtifactTreeData {
@@ -109,6 +126,9 @@ export function buildArtifactTree(session: SessionData | null | undefined): Arti
   const refKeys = Object.keys(refFiles);
   const hasPrimaryText = Boolean(promptText.trim());
   const hasNestedSuite = refKeys.some((k) => /^skills\/[^/]+\/.+/.test(k));
+  const isRepoContext = Boolean(
+    session?.is_repo_context || session?.state?.is_repo_context || 'AGENTS.md' in refFiles,
+  );
 
   const primaryLabel = hasNestedSuite
     ? targetType === 'HYBRID_BUNDLE'
@@ -118,6 +138,8 @@ export function buildArtifactTree(session: SessionData | null | undefined): Arti
     ? 'SKILL.md'
     : targetType === 'HYBRID_BUNDLE'
     ? 'Primary Bundle'
+    : isRepoContext
+    ? 'AGENTS.md'
     : 'SYSTEM_PROMPT.md';
 
   if (!hasNestedSuite) {
@@ -125,7 +147,7 @@ export function buildArtifactTree(session: SessionData | null | undefined): Arti
       hasNestedSuite: false,
       showPrimary: hasPrimaryText || targetType !== 'SKILL_SUITE',
       primaryLabel,
-      rootExtraKeys: refKeys,
+      rootExtraKeys: refKeys.slice().sort(compareArtifactPaths),
       skillGroups: [],
     };
   }
@@ -148,12 +170,7 @@ export function buildArtifactTree(session: SessionData | null | undefined): Arti
   const skillGroups: ArtifactSkillGroup[] = Array.from(groupMap.entries()).map(
     ([slug, files]) => ({
       slug,
-      files: files.slice().sort((a, b) => {
-        const aIsRoot = a.endsWith('/SKILL.md');
-        const bIsRoot = b.endsWith('/SKILL.md');
-        if (aIsRoot !== bIsRoot) return aIsRoot ? -1 : 1;
-        return a.localeCompare(b);
-      }),
+      files: files.slice().sort(compareArtifactPaths),
     }),
   );
 
@@ -164,7 +181,7 @@ export function buildArtifactTree(session: SessionData | null | undefined): Arti
     hasNestedSuite: true,
     showPrimary,
     primaryLabel,
-    rootExtraKeys,
+    rootExtraKeys: rootExtraKeys.sort(compareArtifactPaths),
     skillGroups,
   };
 }

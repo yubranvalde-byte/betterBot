@@ -786,22 +786,7 @@ export function App() {
   );
 
   return (
-    <div className="relative min-h-screen flex flex-col bg-porcelain text-ink overflow-x-clip">
-      {/* Ambient Frosted-Glass Studio Light Wash */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none fixed z-0"
-        style={{
-          top: '-120px',
-          right: '10%',
-          width: '720px',
-          height: '420px',
-          background:
-            'radial-gradient(ellipse at 25% 40%, rgba(56, 189, 248, 0.055) 0%, transparent 60%), radial-gradient(ellipse at 55% 45%, rgba(129, 140, 248, 0.05) 0%, transparent 62%), radial-gradient(ellipse at 82% 55%, rgba(251, 146, 60, 0.045) 0%, transparent 60%)',
-          filter: 'blur(64px)',
-        }}
-      />
-
+    <div className="relative min-h-screen flex flex-col bg-prism-canvas text-ink overflow-x-clip">
       <TopNavBar
         activeView={activeView}
         onSelectView={(view) => navigateView(view)}

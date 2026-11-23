@@ -24,6 +24,7 @@ import {
   HorizontalConduitSegment,
   type ConduitState,
 } from '../OpticalConduit';
+import { Tooltip } from '../Tooltip';
 
 interface TopologyViewProps {
   session: SessionData | null;
@@ -201,7 +202,7 @@ export function TopologyView({
     NODE_DEFS.find((n) => n.id === selectedNodeFilter)?.title || '';
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 lg:px-8 py-8 bg-porcelain/60 relative z-10">
+    <div className="flex-1 overflow-y-auto px-6 lg:px-8 py-8 relative z-10">
       <div className="max-w-[1320px] mx-auto space-y-6">
         {/* Optical Conduit Workbench */}
         <section className="card-porcelain rounded-[14px] p-6">
@@ -213,22 +214,30 @@ export function TopologyView({
               >
                 OPTICAL CONDUIT WORKBENCH · PHASE 04
               </div>
-              <h1 className="font-display text-2xl font-bold tracking-[-0.025em] text-obsidian">
-                טופולוגיית הסוכנים (
-                <bdi dir="ltr" className="font-mono text-lg font-medium">
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="font-display text-2xl font-bold tracking-[-0.025em] text-obsidian">
+                  טופולוגיית הסוכנים
+                </h1>
+                <span
+                  dir="ltr"
+                  className="font-mono text-xs px-2.5 py-1 rounded-md bg-recessed text-slate-ink border border-hairline"
+                >
                   LangGraph StateGraph
-                </bdi>
-                )
-              </h1>
-              <p className="text-xs text-slate-ink mt-1">
+                </span>
+              </div>
+              <p className="text-xs text-slate-ink mt-1.5">
                 לחץ על כרטיס סוכן כדי לסנן את יומן הטלמטריה שלו, או פתח ישירות את חלון העבודה שלו
               </p>
             </div>
 
             {/* Circuit Breaker & Iteration Indicator */}
-            <div className="flex items-center gap-3 border border-hairline bg-porcelain px-3.5 py-2 rounded-md">
-              <span className="text-xs text-slate-ink">
-                איטרציות (<bdi dir="ltr" className="font-mono text-[11px]">Circuit Breaker</bdi>):
+            <div className="flex items-center gap-2.5 border border-hairline bg-porcelain px-3.5 py-2 rounded-md">
+              <span className="text-xs text-slate-ink">איטרציות</span>
+              <span
+                dir="ltr"
+                className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-white border border-hairline text-muted"
+              >
+                Circuit Breaker
               </span>
               <div className="flex items-center gap-1" dir="ltr">
                 {[1, 2, 3].map((step) => {
@@ -257,156 +266,161 @@ export function TopologyView({
             </div>
           </div>
 
-          {/* 4-Node Horizontal Optical Conduit Pipeline */}
-          <div
-            dir="ltr"
-            className="mt-6 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] gap-y-2 gap-x-0 items-stretch"
-          >
-            {NODE_DEFS.map((node, index) => {
-              const Icon = node.Icon;
-              const vis = getNodeVisualState(node.id);
-              const nodeInfo = telemetry[node.id] || healthRouting?.[node.id] || null;
-              const modelLabel = formatModelBadgeText(nodeInfo);
-              const isSelectedFilter = selectedNodeFilter === node.id;
-              const isActive = vis.kind === 'active';
+          {/* 4-Node Horizontal Optical Conduit Pipeline (Overflow-Safe When Betty Docked) */}
+          <div className="mt-6 overflow-x-auto pb-2">
+            <div
+              dir="ltr"
+              className="min-w-[860px] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)] gap-y-2 gap-x-0 items-stretch"
+            >
+              {NODE_DEFS.map((node, index) => {
+                const Icon = node.Icon;
+                const vis = getNodeVisualState(node.id);
+                const nodeInfo = telemetry[node.id] || healthRouting?.[node.id] || null;
+                const modelLabel = formatModelBadgeText(nodeInfo);
+                const isSelectedFilter = selectedNodeFilter === node.id;
+                const isActive = vis.kind === 'active';
 
-              const cardClasses = isActive
-                ? `bg-surface border-hairline-strong prism-aura shadow-sm ${node.topAccentActive}`
-                : isSelectedFilter
-                ? `bg-surface border-2 border-obsidian shadow-xs ${node.topAccentActive}`
-                : vis.kind === 'completed'
-                ? `bg-surface border border-hairline hover:border-hairline-strong ${node.topAccentHover}`
-                : vis.kind === 'escalated'
-                ? 'bg-surface border border-crimson/50'
-                : vis.kind === 'warning'
-                ? 'bg-surface border border-amber/50'
-                : `bg-porcelain/80 border border-hairline text-slate-ink hover:border-hairline-strong ${node.topAccentHover}`;
+                const cardClasses = isActive
+                  ? `bg-white border-hairline-strong prism-aura shadow-sm ${node.topAccentActive}`
+                  : isSelectedFilter
+                  ? `bg-white border-2 border-obsidian shadow-xs ${node.topAccentActive}`
+                  : vis.kind === 'completed'
+                  ? `bg-white border border-[rgba(17,18,22,0.08)] hover:border-hairline-strong ${node.topAccentHover}`
+                  : vis.kind === 'escalated'
+                  ? 'bg-white border border-crimson/50'
+                  : vis.kind === 'warning'
+                  ? 'bg-white border border-amber/50'
+                  : `bg-white border border-[rgba(17,18,22,0.08)] text-slate-ink hover:border-hairline-strong ${node.topAccentHover}`;
 
-              const segmentState =
-                index === 0 ? conduit12State : index === 1 ? conduit24State : conduit43State;
-              const segmentLabel =
-                index === 0
-                  ? '<ARTIFACT_BLUEPRINT>'
-                  : index === 1
-                  ? 'Challenger'
-                  : 'Gate 2';
+                const segmentState =
+                  index === 0 ? conduit12State : index === 1 ? conduit24State : conduit43State;
+                const segmentLabel =
+                  index === 0
+                    ? '<ARTIFACT_BLUEPRINT>'
+                    : index === 1
+                    ? 'Challenger'
+                    : 'Gate 2';
 
-              return (
-                <div key={node.id} className="contents">
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={() =>
-                      setSelectedNodeFilter((prev) => (prev === node.id ? null : node.id))
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setSelectedNodeFilter((prev) => (prev === node.id ? null : node.id));
+                return (
+                  <div key={node.id} className="contents">
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={() =>
+                        setSelectedNodeFilter((prev) => (prev === node.id ? null : node.id))
                       }
-                    }}
-                    className={`text-left rounded-md p-4 flex flex-col justify-between gap-3 canon-transition cursor-pointer min-w-0 ${cardClasses}`}
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2 mb-2.5">
-                        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted">
-                          {node.phase}
-                        </span>
-                        {isActive ? (
-                          <span
-                            className={`w-2 h-2 rounded-full ${node.dotColor} animate-pulse shrink-0`}
-                          />
-                        ) : vis.kind === 'completed' ? (
-                          <CheckCircle size={14} weight="fill" className="text-emerald shrink-0" />
-                        ) : null}
-                      </div>
-
-                      <div className="flex items-start gap-2.5">
-                        <span
-                          className={`p-1.5 rounded-md border shrink-0 ${
-                            isActive ? node.activeIconTint : node.iconTint
-                          }`}
-                        >
-                          <Icon size={16} weight="duotone" />
-                        </span>
-                        <div className="min-w-0">
-                          <div className="font-display text-sm font-semibold text-obsidian">
-                            {node.title}
-                          </div>
-                          <div dir="rtl" className="text-xs text-slate-ink mt-0.5 text-right">
-                            {node.role}
-                          </div>
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          setSelectedNodeFilter((prev) => (prev === node.id ? null : node.id));
+                        }
+                      }}
+                      className={`text-left rounded-md p-4 flex flex-col justify-between gap-3 canon-transition cursor-pointer min-w-0 overflow-hidden ${cardClasses}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center justify-between gap-2 mb-2.5">
+                          <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-muted truncate">
+                            {node.phase}
+                          </span>
+                          {isActive ? (
+                            <span
+                              className={`w-2 h-2 rounded-full ${node.dotColor} animate-pulse shrink-0`}
+                            />
+                          ) : vis.kind === 'completed' ? (
+                            <CheckCircle size={14} weight="fill" className="text-emerald shrink-0" />
+                          ) : null}
                         </div>
-                      </div>
-                    </div>
 
-                    <div className="space-y-2 pt-1">
-                      {modelLabel && (
-                        <div>
+                        <div className="flex items-start gap-2.5 min-w-0">
                           <span
-                            className={`whitespace-nowrap inline-flex items-center gap-1.5 px-2.5 py-1 rounded-sm border font-mono text-[11px] leading-none ${
-                              nodeInfo && 'fallback_used' in nodeInfo && nodeInfo.fallback_used
-                                ? 'bg-amber-tint border-amber/30 text-amber'
-                                : 'bg-porcelain border-hairline text-obsidian'
+                            className={`p-1.5 rounded-md border shrink-0 ${
+                              isActive ? node.activeIconTint : node.iconTint
                             }`}
                           >
-                            {modelLabel}
+                            <Icon size={16} weight="duotone" />
                           </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-display text-sm font-semibold text-obsidian truncate">
+                              {node.title}
+                            </div>
+                            <div dir="rtl" className="text-xs text-slate-ink mt-0.5 text-right truncate">
+                              {node.role}
+                            </div>
+                          </div>
                         </div>
-                      )}
+                      </div>
 
-                      <div className="flex items-center justify-between gap-2 pt-0.5">
-                        <span
-                          dir="rtl"
-                          className={`font-mono text-[11px] px-2 py-0.5 rounded-sm border ${
-                            isActive
-                              ? 'bg-surface border-obsidian text-obsidian font-medium'
-                              : vis.kind === 'completed'
-                              ? 'bg-emerald-tint border-emerald/30 text-emerald font-medium'
-                              : vis.kind === 'escalated'
-                              ? 'bg-crimson-tint border-crimson/30 text-crimson font-medium'
-                              : vis.kind === 'warning'
-                              ? 'bg-amber-tint border-amber/30 text-amber font-medium'
-                              : 'bg-surface border-hairline text-muted'
-                          }`}
-                        >
-                          {vis.badge}
-                        </span>
+                      <div className="space-y-2 pt-1 min-w-0">
+                        {modelLabel && (
+                          <div className="max-w-full">
+                            <Tooltip content={modelLabel} dir="ltr" className="max-w-full inline-flex">
+                              <span
+                                className={`max-w-full inline-flex items-center px-2.5 py-1 rounded-sm border font-mono text-[11px] leading-none overflow-hidden ${
+                                  nodeInfo && 'fallback_used' in nodeInfo && nodeInfo.fallback_used
+                                    ? 'bg-amber-tint border-amber/30 text-amber'
+                                    : 'bg-porcelain border-hairline text-obsidian'
+                                }`}
+                              >
+                                <span className="truncate">{modelLabel}</span>
+                              </span>
+                            </Tooltip>
+                          </div>
+                        )}
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openNodeWorkspace(node.id);
-                          }}
-                          title="עבור לחלון העבודה של סוכן זה"
-                          className="font-mono text-[10px] text-slate-ink hover:text-obsidian inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm hover:bg-hover canon-transition cursor-pointer"
-                        >
-                          <span>פתח</span>
-                          <ArrowSquareOut size={11} />
-                        </button>
+                        <div className="flex items-center justify-between gap-2 pt-0.5 min-w-0">
+                          <span
+                            dir="rtl"
+                            className={`font-mono text-[11px] px-2 py-0.5 rounded-sm border truncate ${
+                              isActive
+                                ? 'bg-white border-obsidian text-obsidian font-medium'
+                                : vis.kind === 'completed'
+                                ? 'bg-emerald-tint border-emerald/30 text-emerald font-medium'
+                                : vis.kind === 'escalated'
+                                ? 'bg-crimson-tint border-crimson/30 text-crimson font-medium'
+                                : vis.kind === 'warning'
+                                ? 'bg-amber-tint border-amber/30 text-amber font-medium'
+                                : 'bg-porcelain border-hairline text-muted'
+                            }`}
+                          >
+                            {vis.badge}
+                          </span>
+
+                          <Tooltip content="עבור לחלון העבודה של סוכן זה" placement="top">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openNodeWorkspace(node.id);
+                              }}
+                              className="font-mono text-[10px] text-slate-ink hover:text-obsidian inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm hover:bg-hover canon-transition cursor-pointer shrink-0"
+                            >
+                              <span>פתח</span>
+                              <ArrowSquareOut size={11} />
+                            </button>
+                          </Tooltip>
+                        </div>
                       </div>
                     </div>
+
+                    {index < NODE_DEFS.length - 1 && (
+                      <HorizontalConduitSegment
+                        state={segmentState}
+                        label={segmentLabel}
+                        bidirectional={index === 2}
+                      />
+                    )}
                   </div>
+                );
+              })}
 
-                  {index < NODE_DEFS.length - 1 && (
-                    <HorizontalConduitSegment
-                      state={segmentState}
-                      label={segmentLabel}
-                      bidirectional={index === 2}
-                    />
-                  )}
-                </div>
-              );
-            })}
-
-            {/* Sweeping Lower Curved Hill-Climbing Feedback Conduit (Docked under Adjudicator <-> Upgrader) */}
-            <div className="hidden xl:block xl:col-start-5 xl:col-span-3">
-              <HillClimbingFeedbackConduit
-                state={hillClimbLoopState}
-                label="Hill Climbing Loop"
-                iterationCount={iter}
-              />
+              {/* Sweeping Lower Curved Hill-Climbing Feedback Conduit (Docked under Adjudicator <-> Upgrader) */}
+              <div className="col-start-5 col-span-3">
+                <HillClimbingFeedbackConduit
+                  state={hillClimbLoopState}
+                  label="Hill Climbing Loop"
+                  iterationCount={iter}
+                />
+              </div>
             </div>
           </div>
         </section>

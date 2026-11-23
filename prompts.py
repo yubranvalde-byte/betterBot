@@ -62,6 +62,29 @@ HELPER_READINESS_QUESTIONS = [
         ),
     },
     {
+        "name": "needs_scripts",
+        "type": "noul",
+        "choices": ["Yes", "No"],
+        "question": (
+            "Should deterministic Python 3 stdlib helper scripts (`scripts/<name>.py`) be generated? "
+            "Answer 'Yes' ONLY when the user's workflow includes deterministic, repetitive mechanical tasks "
+            "(e.g., JSON/CSV validation, schema checks, math/data transformation, file parsing) that should be "
+            "offloaded to Python stdlib scripts instead of LLM reasoning. "
+            "Answer 'No' for pure writing, ideation, or conversational prompts, and ALWAYS answer 'No' for SYSTEM_PROMPT."
+        ),
+    },
+    {
+        "name": "is_repo_context",
+        "type": "noul",
+        "choices": ["Yes", "No"],
+        "question": (
+            "Is the user building a repository-level operational contract or root instruction file "
+            "for AI coding agents (e.g., `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, or repo context engineering)? "
+            "Answer 'Yes' ONLY for repository/codebase coding-agent contracts; answer 'No' for standard chatbot personas, "
+            "general system prompts, or standalone non-repo workflows."
+        ),
+    },
+    {
         "name": "ready_to_compile",
         "type": "noul",
         "choices": ["Yes", "No"],

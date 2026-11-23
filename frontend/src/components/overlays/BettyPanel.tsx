@@ -16,6 +16,7 @@ import {
 import { STORAGE_KEYS } from '../../api/client';
 import type { BettyMessage, BettyMode } from '../../types/api';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
+import { Tooltip } from '../Tooltip';
 
 interface BettyPanelProps {
   isOpen: boolean;
@@ -241,22 +242,27 @@ export function BettyPanel({
     >
       {/* Docked Edge Resize Handle (Inner right edge in RTL) */}
       {isDocked && !isMaximized && (
-        <div
-          title="גרור לשינוי רוחב הפאנל"
-          onPointerDown={(e) => {
-            if (e.button !== 0 || window.innerWidth < 1024) return;
-            e.preventDefault();
-            dragStateRef.current = {
-              kind: 'dock-resize',
-              startX: e.clientX,
-              startY: e.clientY,
-              startWidth: dockedWidth,
-              startRect: floatingRect,
-            };
-            document.body.style.userSelect = 'none';
-          }}
-          className="hidden lg:block absolute top-0 bottom-0 -right-1 w-2 cursor-ew-resize hover:bg-obsidian/15 z-10"
-        />
+        <Tooltip
+          content="גרור לשינוי רוחב הפאנל"
+          placement="left"
+          className="hidden lg:block absolute top-0 bottom-0 -right-1 w-2 z-10"
+        >
+          <div
+            onPointerDown={(e) => {
+              if (e.button !== 0 || window.innerWidth < 1024) return;
+              e.preventDefault();
+              dragStateRef.current = {
+                kind: 'dock-resize',
+                startX: e.clientX,
+                startY: e.clientY,
+                startWidth: dockedWidth,
+                startRect: floatingRect,
+              };
+              document.body.style.userSelect = 'none';
+            }}
+            className="w-full h-full cursor-ew-resize hover:bg-obsidian/15"
+          />
+        </Tooltip>
       )}
 
       {/* Title Bar */}
@@ -292,40 +298,45 @@ export function BettyPanel({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={() => {
-              setIsMaximized(false);
-              setIsDocked((prev) => !prev);
-            }}
-            title={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'}
-            className={`p-1.5 rounded-sm border canon-transition cursor-pointer ${
-              isDocked
-                ? 'border-obsidian bg-recessed text-obsidian'
-                : 'border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian'
-            }`}
-          >
-            <SidebarSimple size={14} />
-          </button>
+          <Tooltip content={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'} placement="bottom">
+            <button
+              type="button"
+              onClick={() => {
+                setIsMaximized(false);
+                setIsDocked((prev) => !prev);
+              }}
+              aria-label={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'}
+              className={`p-1.5 rounded-sm border canon-transition cursor-pointer ${
+                isDocked
+                  ? 'border-obsidian bg-recessed text-obsidian'
+                  : 'border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian'
+              }`}
+            >
+              <SidebarSimple size={14} />
+            </button>
+          </Tooltip>
 
-          <button
-            type="button"
-            onClick={() => setIsMaximized((prev) => !prev)}
-            title={isMaximized ? 'שחזר גודל' : 'הגדל חלון'}
-            className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
-          >
-            {isMaximized ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-          </button>
+          <Tooltip content={isMaximized ? 'שחזר גודל' : 'הגדל חלון'} placement="bottom">
+            <button
+              type="button"
+              onClick={() => setIsMaximized((prev) => !prev)}
+              aria-label={isMaximized ? 'שחזר גודל' : 'הגדל חלון'}
+              className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
+            >
+              {isMaximized ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+            </button>
+          </Tooltip>
 
-          <button
-            type="button"
-            onClick={onClose}
-            title="סגור חלון"
-            aria-label="סגור חלון בטי"
-            className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
-          >
-            <X size={14} />
-          </button>
+          <Tooltip content="סגור חלון" placement="bottom">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="סגור חלון בטי"
+              className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
+            >
+              <X size={14} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -375,19 +386,24 @@ export function BettyPanel({
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={handleClearClick}
-          title={confirmClear ? 'לחץ שוב לאישור ניקוי השיחה' : 'נקה שיחה במצב הנוכחי'}
-          className={`h-7 px-2 rounded-sm border text-[11px] inline-flex items-center gap-1 shrink-0 canon-transition cursor-pointer ${
-            confirmClear
-              ? 'border-crimson bg-crimson text-white font-medium'
-              : 'border-hairline bg-porcelain hover:bg-hover text-slate-ink hover:text-obsidian'
-          }`}
+        <Tooltip
+          content={confirmClear ? 'לחץ שוב לאישור ניקוי השיחה' : 'נקה שיחה במצב הנוכחי'}
+          placement="bottom"
         >
-          <Trash size={12} />
-          {confirmClear && <span>אפס שיחה?</span>}
-        </button>
+          <button
+            type="button"
+            onClick={handleClearClick}
+            aria-label={confirmClear ? 'לחץ שוב לאישור ניקוי השיחה' : 'נקה שיחה במצב הנוכחי'}
+            className={`h-7 px-2 rounded-sm border text-[11px] inline-flex items-center gap-1 shrink-0 canon-transition cursor-pointer ${
+              confirmClear
+                ? 'border-crimson bg-crimson text-white font-medium'
+                : 'border-hairline bg-porcelain hover:bg-hover text-slate-ink hover:text-obsidian'
+            }`}
+          >
+            <Trash size={12} />
+            {confirmClear && <span>אפס שיחה?</span>}
+          </button>
+        </Tooltip>
       </div>
 
       {/* Wrapping Quick Suggestions — ZERO horizontal scrollbar */}
@@ -473,54 +489,61 @@ export function BettyPanel({
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
-        className="px-4 py-3 border-t border-hairline bg-porcelain flex items-end gap-2"
+        className="px-4 py-3 border-t border-hairline bg-porcelain"
       >
-        <textarea
-          ref={inputRef}
-          rows={2}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              handleSubmit();
+        <div className="prism-composer flex items-end gap-2 rounded-xl border border-hairline bg-white px-3 py-2">
+          <textarea
+            ref={inputRef}
+            rows={2}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                handleSubmit();
+              }
+            }}
+            placeholder={
+              mode === 'tech_support'
+                ? 'שאל את בטי איך המערכת עובדת או איך לתפעל...'
+                : 'התייעץ עם בטי על ארכיטקטורת הפרומפט והמודולים...'
             }
-          }}
-          placeholder={
-            mode === 'tech_support'
-              ? 'שאל את בטי איך המערכת עובדת או איך לתפעל...'
-              : 'התייעץ עם בטי על ארכיטקטורת הפרומפט והמודולים...'
-          }
-          className="flex-1 resize-none rounded-md border border-hairline-strong bg-surface px-2.5 py-2 text-xs text-ink placeholder:text-muted focus:border-obsidian focus:outline-none min-h-[52px] max-h-[140px]"
-        />
-        <button
-          type="submit"
-          disabled={!draft.trim() || isLoading}
-          className="btn-obsidian h-9 px-3 rounded-md text-xs font-medium inline-flex items-center gap-1 shrink-0 cursor-pointer"
-        >
-          <span>שלח</span>
-          <PaperPlaneTilt size={13} weight="bold" />
-        </button>
+            className="flex-1 resize-none bg-transparent text-xs text-ink placeholder:text-muted focus:outline-none min-h-[44px] max-h-[140px]"
+          />
+          <button
+            type="submit"
+            disabled={!draft.trim() || isLoading}
+            className="btn-obsidian h-8 px-3 rounded-lg text-xs font-medium inline-flex items-center gap-1 shrink-0 cursor-pointer"
+          >
+            <span>שלח</span>
+            <PaperPlaneTilt size={13} weight="bold" />
+          </button>
+        </div>
       </form>
 
       {/* Bottom-right floating resize handle */}
       {!isDocked && !isMaximized && (
-        <div
-          title="שנה גודל חלון"
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.preventDefault();
-            dragStateRef.current = {
-              kind: 'float-resize',
-              startX: e.clientX,
-              startY: e.clientY,
-              startWidth: dockedWidth,
-              startRect: floatingRect,
-            };
-            document.body.style.userSelect = 'none';
-          }}
-          className="absolute bottom-0 right-0 w-3.5 h-3.5 cursor-nwse-resize"
-        />
+        <Tooltip
+          content="שנה גודל חלון"
+          placement="top"
+          className="absolute bottom-0 right-0 w-3.5 h-3.5"
+        >
+          <div
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              e.preventDefault();
+              dragStateRef.current = {
+                kind: 'float-resize',
+                startX: e.clientX,
+                startY: e.clientY,
+                startWidth: dockedWidth,
+                startRect: floatingRect,
+              };
+              document.body.style.userSelect = 'none';
+            }}
+            className="w-full h-full cursor-nwse-resize"
+          />
+        </Tooltip>
       )}
     </aside>
   );

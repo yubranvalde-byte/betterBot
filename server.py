@@ -314,6 +314,8 @@ def create_new_session(
         "linter_result": {},
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
+        "needs_scripts": False,
+        "is_repo_context": False,
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
@@ -329,6 +331,8 @@ def create_new_session(
         "active_node": None,
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
+        "needs_scripts": False,
+        "is_repo_context": False,
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
@@ -410,6 +414,32 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
 
     state["reference_files"] = sanitized_refs
     session["reference_files"] = sanitized_refs
+    raw_needs_scripts = (
+        state.get("needs_scripts")
+        if "needs_scripts" in state
+        else session.get("needs_scripts", False)
+    )
+    needs_scripts = (
+        False
+        if str(session["target_type"]).strip().upper() == "SYSTEM_PROMPT"
+        else bool(raw_needs_scripts)
+    )
+    state["needs_scripts"] = needs_scripts
+    session["needs_scripts"] = needs_scripts
+    readiness_obj = state.get("readiness_scores") or session.get("readiness_scores") or {}
+    raw_bp_text = session.get("raw_blueprint") or ""
+    is_repo_context = (
+        bool(state.get("is_repo_context"))
+        or bool(session.get("is_repo_context"))
+        or ("AGENTS.md" in sanitized_refs)
+        or main.is_repo_context_mode(
+            readiness_obj,
+            fallback_xml=raw_bp_text,
+            ref_files=sanitized_refs,
+        )
+    )
+    state["is_repo_context"] = is_repo_context
+    session["is_repo_context"] = is_repo_context
     session["rubric_scores"] = state.get("rubric_scores") or session.get("rubric_scores") or {}
     session["readiness_scores"] = state.get("readiness_scores") or session.get("readiness_scores") or {}
     session["model_telemetry"] = state.get("model_telemetry") or session.get("model_telemetry") or {}
@@ -582,7 +612,10 @@ async def delete_session_endpoint(
 
 
 def build_install_guide_md(
-    target_type: str, slug_name: str, file_paths: List[str]
+    target_type: str,
+    slug_name: str,
+    file_paths: List[str],
+    is_repo_context: bool = False,
 ) -> str:
     """
     Deterministically builds BETTERBOT_INSTALL.md (0 LLM calls) in concise,
@@ -607,15 +640,35 @@ def build_install_guide_md(
         or f"- `{safe_slug}/` (empty)"
     )
     has_system_prompt = "SYSTEM_PROMPT.md" in seen
+    has_agents_md = is_repo_context or ("AGENTS.md" in seen)
+    script_items = [
+        p
+        for p in manifest_items
+        if p.endswith(".py") and (p.startswith("scripts/") or "/scripts/" in p)
+    ]
     policy_rules = [
         "**Inspect Workspace First:** Before copying any files, inspect the target repository to detect the active skills directory "
         "(such as `.agent/skills/`, `.claude/skills/`, `.gemini/skills/`, or the user's configured skills root). "
         "If no skills directory is detected or the target location is unclear, ask the user before writing files.",
         "**Check Slug Collisions & Confirm Overwrites:** Check whether the target slug folder or any destination file already exists. "
         "If a collision is detected, halt and request explicit user confirmation before overwriting.",
-        "**Copy Skill Folders Intact:** Preserve relative `references/` paths and nested directory structures intact when installing "
+        "**Copy Skill Folders Intact:** Preserve relative `references/` and `scripts/` paths and nested directory structures intact when installing "
         "`<slug>/` or nested `skills/<sub_slug>/` folders.",
     ]
+    if script_items:
+        scripts_formatted = ", ".join(f"`{p}`" for p in script_items)
+        policy_rules.append(
+            f"**Bundled Executable Scripts (`scripts/` — Python 3 Stdlib Only):** This package bundles deterministic helper script(s) ({scripts_formatted}) "
+            "built exclusively with the **Python 3 standard library** (zero `pip install` third-party dependencies). "
+            "Keep `scripts/*.py` in their exact relative path alongside `SKILL.md` so CLI invocations resolve without modification."
+        )
+    if has_agents_md:
+        policy_rules.append(
+            "**Repository Operational Contract (`AGENTS.md` — Do No Harm Integration):** This package includes a repository-level coding-agent "
+            "operational contract (`AGENTS.md`). Before placing `AGENTS.md` at the target repository root (or syncing it with `CLAUDE.md`, `GEMINI.md`, "
+            "or `.cursorrules`), inspect whether any root instruction file already exists. Never blindly overwrite an existing `AGENTS.md`, `CLAUDE.md`, "
+            "or `GEMINI.md` — diff and merge sections or request explicit user confirmation first."
+        )
     if has_system_prompt:
         policy_rules.append(
             "**Root Instruction File Protection (`SYSTEM_PROMPT.md`):** `SYSTEM_PROMPT.md` is present in this package. "
@@ -665,6 +718,18 @@ async def download_session_bundle(
             continue
         sanitized_refs[norm_path] = content or ""
 
+    is_repo_context = bool(
+        sess.get("is_repo_context")
+        or (sess.get("state") or {}).get("is_repo_context")
+        or ("AGENTS.md" in sanitized_refs)
+    )
+    root_prompt_file = "AGENTS.md" if is_repo_context else "SYSTEM_PROMPT.md"
+    if is_repo_context and "SYSTEM_PROMPT.md" in sanitized_refs:
+        if "AGENTS.md" not in sanitized_refs:
+            sanitized_refs["AGENTS.md"] = sanitized_refs.pop("SYSTEM_PROMPT.md")
+        else:
+            sanitized_refs.pop("SYSTEM_PROMPT.md", None)
+
     entries: List[Tuple[str, str]] = []
     written_paths = set()
 
@@ -674,16 +739,16 @@ async def download_session_bundle(
             written_paths.add("SKILL.md")
     elif target_type == "HYBRID_BUNDLE":
         if (
-            "SYSTEM_PROMPT.md" not in sanitized_refs
+            root_prompt_file not in sanitized_refs
             and "SKILL.md" not in sanitized_refs
             and primary_content
         ):
-            entries.append(("SYSTEM_PROMPT.md", primary_content))
-            written_paths.add("SYSTEM_PROMPT.md")
+            entries.append((root_prompt_file, primary_content))
+            written_paths.add(root_prompt_file)
     else:
-        if "SYSTEM_PROMPT.md" not in sanitized_refs and primary_content:
-            entries.append(("SYSTEM_PROMPT.md", primary_content))
-            written_paths.add("SYSTEM_PROMPT.md")
+        if root_prompt_file not in sanitized_refs and primary_content:
+            entries.append((root_prompt_file, primary_content))
+            written_paths.add(root_prompt_file)
 
     for norm_path, content in sanitized_refs.items():
         if norm_path in written_paths or (norm_path == "blueprint.xml" and raw_blueprint):
@@ -696,7 +761,9 @@ async def download_session_bundle(
         written_paths.add("blueprint.xml")
 
     manifest_paths = [rel for rel, _ in entries] + ["BETTERBOT_INSTALL.md"]
-    install_guide = build_install_guide_md(target_type, safe_slug, manifest_paths)
+    install_guide = build_install_guide_md(
+        target_type, safe_slug, manifest_paths, is_repo_context=is_repo_context
+    )
     entries.append(("BETTERBOT_INSTALL.md", install_guide))
 
     buf = io.BytesIO()

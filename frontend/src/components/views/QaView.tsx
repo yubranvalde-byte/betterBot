@@ -12,7 +12,7 @@ import {
 import type { DiffMode, SessionData } from '../../types/api';
 import { buildUnifiedDiff, renderDiffHtml } from '../../utils/diff';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
-import { GlassGaugeTube } from '../OpticalConduit';
+import { PrismBar } from '../PrismBar';
 
 interface QaViewProps {
   session: SessionData | null;
@@ -161,7 +161,7 @@ export function QaView({
   };
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-porcelain/60 relative z-10">
+    <div className="flex flex-col flex-1 min-h-0 relative z-10">
       <div className="flex-1 overflow-y-auto px-6 lg:px-8 py-8">
         <div className="max-w-5xl mx-auto space-y-6">
           {/* Header & Score Summary Card */}
@@ -247,19 +247,13 @@ export function QaView({
               )}
             </div>
 
-            {/* 6/7-Dimension Rubric Table with Borosilicate Glass Gauge Tubes */}
+            {/* 6/7-Dimension Rubric Table with Unified Signature PrismBar */}
             {rubric.used_decision_model && (
               <div className="mt-6 border-t border-hairline pt-2">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10">
                   {dims.map((dim) => {
                     const rawVal = Number(rubric[dim.key] ?? 0);
                     const pct = Math.max(0, Math.min(100, Math.round((rawVal / 5.0) * 100)));
-                    const gaugeVariant =
-                      rawVal >= 4.0
-                        ? 'emerald'
-                        : rawVal < 3.8
-                        ? 'crimson'
-                        : 'amber';
                     return (
                       <div key={dim.key} className="border-b border-hairline py-3.5">
                         <div
@@ -278,7 +272,7 @@ export function QaView({
                             {rawVal.toFixed(1)} / 5
                           </span>
                         </div>
-                        <GlassGaugeTube percent={pct} variant={gaugeVariant} height="sm" />
+                        <PrismBar value={pct} variant={rawVal < 3.0 ? 'warning' : 'prism'} />
                       </div>
                     );
                   })}

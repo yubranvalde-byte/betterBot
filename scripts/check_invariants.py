@@ -118,7 +118,9 @@ def check_path_sanitizer() -> Tuple[str, str]:
     ]
     valid_cases = [
         ("references/guide.md", "references/guide.md"),
+        ("scripts/validate.py", "scripts/validate.py"),
         ("skills/sub_a/SKILL.md", "skills/sub_a/SKILL.md"),
+        ("skills/sub_a/scripts/validate.py", "skills/sub_a/scripts/validate.py"),
     ]
 
     failures: List[str] = []
@@ -205,9 +207,39 @@ def check_rubric_parity() -> Tuple[str, str]:
     if missing_exports:
         return "FAIL", f"prompts.py missing/empty prompt exports: {', '.join(missing_exports)}"
 
+    readiness_names = {q.get("name") for q in getattr(prompts_mod, "HELPER_READINESS_QUESTIONS", [])}
+    missing_readiness = [
+        k for k in ("needs_auxiliary_files", "needs_scripts", "is_repo_context") if k not in readiness_names
+    ]
+    if missing_readiness:
+        return "FAIL", f"HELPER_READINESS_QUESTIONS missing flags: {', '.join(missing_readiness)}"
+
+    try:
+        prompts_mod.HELPER_PROMPT.format(
+            user_input="u",
+            missing_fields_hint="m",
+            needs_scripts="False",
+            is_repo_context="True",
+        )
+        prompts_mod.CONSTRUCT_PROMPT.format(
+            challenger_xml="<x/>",
+            needs_auxiliary_files="False",
+            needs_scripts="False",
+            is_repo_context="True",
+        )
+        prompts_mod.UPGRADER_PROMPT.format(
+            champion_xml="<x/>",
+            champion_prompt="p",
+            error_log="e",
+            needs_scripts="False",
+            is_repo_context="True",
+        )
+    except Exception as exc:
+        return "FAIL", f"prompt template formatting failed: {exc}"
+
     return (
         "PASS",
-        "6+1 rubric keys & 7 prompt exports synced across prompts.py, QaView.tsx, api.ts",
+        "6+1 rubric keys, readiness flags & 7 prompt exports synced across prompts.py, QaView.tsx, api.ts",
     )
 
 
@@ -258,14 +290,64 @@ def check_gate_1_5_linter() -> Tuple[str, str]:
     if broken_ref.get("passed", True):
         failures.append("broken reference was not rejected")
 
+    broken_script_ref = validate_compiled_artifacts(
+        {
+            "target_type": "SKILL_PACKAGE",
+            "challenger_prompt": (
+                "---\nname: sample-skill\ndescription: Use when testing.\n---\n"
+                "Run `python scripts/missing.py` to validate input.\n"
+            ),
+            "reference_files": {},
+        }
+    )
+    if broken_script_ref.get("passed", True):
+        failures.append("missing script reference was not rejected")
+
+    orphan_script = validate_compiled_artifacts(
+        {
+            "target_type": "SKILL_PACKAGE",
+            "challenger_prompt": (
+                "---\nname: sample-skill\ndescription: Use when testing.\n---\n"
+                "Standard instructions without script links.\n"
+            ),
+            "reference_files": {
+                "scripts/orphan.py": "import sys\nprint(sys.version)\n",
+            },
+        }
+    )
+    if orphan_script.get("passed", True):
+        failures.append("unreferenced orphan script was not rejected")
+
+    invalid_py_syntax = validate_compiled_artifacts(
+        {
+            "target_type": "SKILL_PACKAGE",
+            "challenger_prompt": (
+                "---\nname: sample-skill\ndescription: Use when testing.\n---\n"
+                "Run `python scripts/validate.py`.\n"
+            ),
+            "reference_files": {
+                "scripts/validate.py": "def broken_syntax(:\n    return 1\n",
+            },
+        }
+    )
+    if invalid_py_syntax.get("passed", True):
+        failures.append("invalid Python syntax in scripts/*.py was not rejected")
+
     valid_pkg = validate_compiled_artifacts(
         {
             "target_type": "SKILL_PACKAGE",
             "challenger_prompt": (
                 "---\nname: sample-skill\ndescription: Use when testing.\n---\n"
-                "See `references/guide.md` for details.\n"
+                "See `references/guide.md` and run `python scripts/validate.py --input data.json`.\n"
             ),
-            "reference_files": {"references/guide.md": "# Guide\nConcrete steps.\n"},
+            "reference_files": {
+                "references/guide.md": "# Guide\nConcrete steps.\n",
+                "scripts/validate.py": (
+                    "import json\nimport sys\n\n"
+                    "if __name__ == '__main__':\n"
+                    "    sys.exit(0)\n"
+                ),
+            },
         }
     )
     if not valid_pkg.get("passed") or valid_pkg.get("errors"):
@@ -278,9 +360,10 @@ def check_gate_1_5_linter() -> Tuple[str, str]:
             "reference_files": {
                 "skills/alpha/SKILL.md": (
                     "---\nname: alpha\ndescription: Alpha tasks; not beta.\n---\n"
-                    "Consult `references/spec.md`.\n"
+                    "Consult `references/spec.md` and execute `python scripts/check.py`.\n"
                 ),
                 "skills/alpha/references/spec.md": "# Alpha Spec\n",
+                "skills/alpha/scripts/check.py": "import sys\nsys.exit(0)\n",
                 "skills/beta/SKILL.md": (
                     "---\nname: beta\ndescription: Beta tasks; not alpha.\n---\n"
                     "Standalone beta workflow.\n"
@@ -293,7 +376,7 @@ def check_gate_1_5_linter() -> Tuple[str, str]:
 
     if failures:
         return "FAIL", "; ".join(failures)
-    return "PASS", "2 defects rejected, valid SKILL_PACKAGE & SKILL_SUITE passed"
+    return "PASS", "5 defects rejected (incl. AST & script refs), valid SKILL_PACKAGE & SKILL_SUITE passed"
 
 
 def print_summary(rows: List[Tuple[str, str, str]]) -> None:

@@ -34,9 +34,9 @@ function OpticalDefs({ ids }: { ids: SvgIds }) {
         <stop offset="100%" stopColor="#FB923C" />
       </linearGradient>
       <linearGradient id={ids.amberGrad} x1="0%" y1="0%" x2="100%" y2="0%">
-        <stop offset="0%" stopColor="#D97706" />
+        <stop offset="0%" stopColor="#FB923C" />
         <stop offset="50%" stopColor="#F59E0B" />
-        <stop offset="100%" stopColor="#FB923C" />
+        <stop offset="100%" stopColor="#818CF8" />
       </linearGradient>
       <filter id={ids.glowFilter} x="-15%" y="-40%" width="130%" height="180%">
         <feGaussianBlur stdDeviation="2" result="blur" />
@@ -109,43 +109,52 @@ function OpticalConduitLayers({
   state,
   ids,
   reverseFlow = false,
+  loopStyle = false,
 }: {
   d: string;
   state: ConduitState;
   ids: SvgIds;
   reverseFlow?: boolean;
+  loopStyle?: boolean;
 }) {
   return (
     <>
-      {/* Layer 1: Recessed Porcelain Channel */}
-      <path d={d} fill="none" stroke="#E2E6EE" strokeWidth={12} strokeLinecap="round" />
+      {/* Layer 1: Recessed Channel With Crisp Contrast Against Porcelain/White */}
+      <path d={d} fill="none" stroke="#DCE2EC" strokeWidth={12} strokeLinecap="round" />
 
-      {/* Layer 2: Borosilicate Glass Tube Body + Top Specular Highlight */}
+      {/* Layer 2: Borosilicate Glass Tube Body + Glass Wall Rim + Specular Highlight */}
+      <path
+        d={d}
+        fill="none"
+        stroke="rgba(17, 18, 22, 0.14)"
+        strokeWidth={9.5}
+        strokeLinecap="round"
+      />
       <path
         d={d}
         fill="none"
         stroke={`url(#${ids.glassGrad})`}
         strokeWidth={8}
         strokeLinecap="round"
-        opacity={0.92}
+        opacity={0.96}
       />
       <path
         d={d}
         fill="none"
-        stroke="rgba(255, 255, 255, 0.95)"
-        strokeWidth={1.5}
+        stroke="rgba(255, 255, 255, 0.98)"
+        strokeWidth={1.6}
         strokeLinecap="round"
         transform="translate(0, -2)"
       />
 
-      {/* Layer 3: Permanent Subtle Internal Prismatic Core (Alive-at-Idle Fiber Optics) */}
+      {/* Layer 3: Permanent Internal Prismatic Core (Visible Fiber Optics at All States) */}
       <path
         d={d}
         fill="none"
-        stroke={`url(#${ids.prismGrad})`}
-        strokeWidth={2}
+        stroke={loopStyle ? `url(#${ids.amberGrad})` : `url(#${ids.prismGrad})`}
+        strokeWidth={2.2}
         strokeLinecap="round"
-        opacity={state === 'idle' || state === 'ambient' ? 0.22 : 0.14}
+        opacity={state === 'idle' ? 0.34 : state === 'ambient' ? 0.42 : 0.3}
       />
 
       {/* State-Driven Optical Core Overlay */}
@@ -153,11 +162,11 @@ function OpticalConduitLayers({
         <path
           d={d}
           fill="none"
-          stroke={`url(#${ids.prismGrad})`}
-          strokeWidth={2.5}
+          stroke={loopStyle ? `url(#${ids.amberGrad})` : `url(#${ids.prismGrad})`}
+          strokeWidth={2.8}
           strokeLinecap="round"
           strokeDasharray="28 212"
-          opacity={0.78}
+          opacity={0.85}
           className="animate-optical-flow-ambient"
           filter={`url(#${ids.glowFilter})`}
         />
@@ -167,8 +176,8 @@ function OpticalConduitLayers({
         <path
           d={d}
           fill="none"
-          stroke="#10B981"
-          strokeWidth={2.5}
+          stroke={loopStyle ? `url(#${ids.amberGrad})` : `url(#${ids.prismGrad})`}
+          strokeWidth={3}
           strokeLinecap="round"
           filter={`url(#${ids.glowFilter})`}
         />
@@ -178,8 +187,8 @@ function OpticalConduitLayers({
         <path
           d={d}
           fill="none"
-          stroke={`url(#${ids.prismGrad})`}
-          strokeWidth={3.5}
+          stroke={loopStyle ? `url(#${ids.amberGrad})` : `url(#${ids.prismGrad})`}
+          strokeWidth={3.6}
           strokeLinecap="round"
           strokeDasharray="36 204"
           className="animate-optical-flow-fast"
@@ -194,14 +203,14 @@ function OpticalConduitLayers({
             d={d}
             fill="none"
             stroke="#FDE68A"
-            strokeWidth={2}
+            strokeWidth={2.2}
             strokeLinecap="round"
           />
           <path
             d={d}
             fill="none"
             stroke={`url(#${ids.amberGrad})`}
-            strokeWidth={3.4}
+            strokeWidth={3.5}
             strokeLinecap="round"
             strokeDasharray="36 204"
             className="animate-optical-flow-fast"
@@ -229,19 +238,19 @@ export function HorizontalConduitSegment({
   const pathD = 'M 6 20 C 30 20, 56 20, 80 20';
 
   return (
-    <div className="flex xl:flex-col items-center justify-center gap-1 py-1 xl:py-0 xl:px-0.5 min-w-[68px]">
+    <div className="flex flex-col items-center justify-center gap-1 px-0.5 min-w-[72px]">
       {label && (
         <span
           className={`font-mono text-[10px] px-2 py-0.5 rounded-full border whitespace-nowrap ${
             state === 'active'
-              ? 'bg-surface border-hairline-strong text-obsidian prism-aura'
+              ? 'bg-white border-hairline-strong text-obsidian prism-aura'
               : state === 'ambient'
-              ? 'bg-surface border-hairline text-slate-ink prism-aura'
+              ? 'bg-white border-hairline text-slate-ink prism-aura'
               : state === 'amber'
               ? 'bg-amber-tint border-amber/30 text-amber font-medium'
               : state === 'completed'
-              ? 'bg-emerald-tint border-emerald/30 text-emerald font-medium'
-              : 'bg-porcelain border-hairline text-muted'
+              ? 'bg-white border-hairline-strong text-obsidian prism-aura'
+              : 'bg-porcelain border-hairline text-slate-ink'
           }`}
         >
           {label}
@@ -250,7 +259,7 @@ export function HorizontalConduitSegment({
 
       <svg
         viewBox="0 0 86 40"
-        className="w-16 xl:w-20 h-8 rotate-90 xl:rotate-0 shrink-0 overflow-visible"
+        className="w-[76px] xl:w-[88px] h-8 shrink-0 overflow-visible"
         aria-hidden="true"
       >
         <OpticalDefs ids={ids} />
@@ -283,7 +292,7 @@ export function HillClimbingFeedbackConduit({
     'M 82 5 C 82 44, 102 48, 138 48 L 282 48 C 318 48, 338 44, 338 5';
 
   return (
-    <div className="hidden xl:flex flex-col items-center -mt-1 px-2">
+    <div className="flex flex-col items-center -mt-1 px-2">
       <svg
         viewBox="0 0 420 68"
         className="w-full h-16 overflow-visible"
@@ -291,7 +300,7 @@ export function HillClimbingFeedbackConduit({
         aria-hidden="true"
       >
         <OpticalDefs ids={ids} />
-        <OpticalConduitLayers d={feedbackPath} state={state} ids={ids} />
+        <OpticalConduitLayers d={feedbackPath} state={state} ids={ids} loopStyle />
         <PortCollar x={82} y={4} orientation="horizontal" state={state} />
         <PortCollar x={338} y={4} orientation="horizontal" state={state} />
       </svg>
@@ -302,8 +311,8 @@ export function HillClimbingFeedbackConduit({
             state === 'amber'
               ? 'bg-amber-tint border-amber/40 text-amber font-medium'
               : state === 'completed'
-              ? 'bg-emerald-tint border-emerald/30 text-emerald font-medium'
-              : 'bg-surface border-hairline text-slate-ink'
+              ? 'bg-white border-amber/35 text-obsidian font-medium prism-aura'
+              : 'bg-white border-hairline text-slate-ink'
           }`}
         >
           {label}
@@ -325,34 +334,32 @@ export function MicroConduitConnector({ state }: { state: ConduitState }) {
       aria-hidden="true"
     >
       <OpticalDefs ids={ids} />
-      <path d={d} fill="none" stroke="#E2E6EE" strokeWidth={5} strokeLinecap="round" />
+      <path d={d} fill="none" stroke="#E2E6EE" strokeWidth={4.5} strokeLinecap="round" />
       <path
         d={d}
         fill="none"
         stroke={`url(#${ids.glassGrad})`}
-        strokeWidth={3}
+        strokeWidth={2.8}
         strokeLinecap="round"
-      />
-      <path
-        d={d}
-        fill="none"
-        stroke={`url(#${ids.prismGrad})`}
-        strokeWidth={1.2}
-        strokeLinecap="round"
-        opacity={0.22}
       />
       {state === 'completed' && (
-        <path d={d} fill="none" stroke="#10B981" strokeWidth={1.6} strokeLinecap="round" />
+        <path
+          d={d}
+          fill="none"
+          stroke={`url(#${ids.prismGrad})`}
+          strokeWidth={2}
+          strokeLinecap="round"
+        />
       )}
       {state === 'ambient' && (
         <path
           d={d}
           fill="none"
           stroke={`url(#${ids.prismGrad})`}
-          strokeWidth={1.6}
+          strokeWidth={1.8}
           strokeLinecap="round"
-          strokeDasharray="8 20"
-          opacity={0.75}
+          strokeDasharray="10 18"
+          opacity={0.8}
           className="animate-optical-flow-ambient"
         />
       )}
@@ -361,9 +368,9 @@ export function MicroConduitConnector({ state }: { state: ConduitState }) {
           d={d}
           fill="none"
           stroke={`url(#${ids.prismGrad})`}
-          strokeWidth={2}
+          strokeWidth={2.2}
           strokeLinecap="round"
-          strokeDasharray="10 18"
+          strokeDasharray="12 16"
           className="animate-optical-flow-fast"
         />
       )}

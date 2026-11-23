@@ -4,13 +4,28 @@ import re
 import sqlite3
 import tempfile
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, List, Optional
 
 DEFAULT_DB_PATH = Path(__file__).parent / "betterbot_history.db"
 FALLBACK_DB_PATH = Path(tempfile.gettempdir()) / "betterbot_history.db"
+
+
+def _normalize_database_url(raw_url: str) -> str:
+    cleaned = (raw_url or "").strip()
+    if cleaned.startswith("postgres://"):
+        cleaned = "postgresql://" + cleaned[len("postgres://") :]
+    if cleaned.startswith("postgresql://"):
+        return cleaned
+    return ""
+
+
+def _get_database_url() -> str:
+    return _normalize_database_url(os.getenv("DATABASE_URL", ""))
+
+
+DATABASE_URL: str = _get_database_url()
 
 
 def _resolve_db_path() -> Path:
@@ -34,18 +49,51 @@ def _resolve_db_path() -> Path:
 DB_PATH: Path = _resolve_db_path()
 
 
-@contextmanager
-def _get_conn() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+class _ConnAdapter:
+    """Unified connection adapter normalizing SQL placeholders and lifecycle across SQLite and PostgreSQL."""
+
+    def __init__(self, conn: Any, is_postgres: bool) -> None:
+        self._conn = conn
+        self.is_postgres = is_postgres
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        adapted_sql = sql.replace("?", "%s") if self.is_postgres else sql
+        return self._conn.execute(adapted_sql, params)
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> "_ConnAdapter":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self._conn.close()
+
+
+def _get_conn() -> _ConnAdapter:
+    db_url = _get_database_url()
+    if db_url:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        raw_conn = psycopg.connect(db_url, row_factory=dict_row, connect_timeout=10)
+        return _ConnAdapter(raw_conn, is_postgres=True)
+
+    raw_conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10.0)
+    raw_conn.row_factory = sqlite3.Row
+    return _ConnAdapter(raw_conn, is_postgres=False)
 
 
 def _utc_now_iso() -> str:
@@ -111,6 +159,24 @@ def _hydrate_session_reference_files(session_data: Dict[str, Any]) -> None:
     session_data["reference_files"] = dict(merged_refs)
     if isinstance(state, dict):
         state["reference_files"] = dict(merged_refs)
+    raw_needs_scripts = (
+        state.get("needs_scripts")
+        if isinstance(state, dict) and "needs_scripts" in state
+        else session_data.get("needs_scripts", False)
+    )
+    needs_scripts = bool(raw_needs_scripts)
+    session_data["needs_scripts"] = needs_scripts
+    if isinstance(state, dict):
+        state["needs_scripts"] = needs_scripts
+    raw_is_repo_context = (
+        state.get("is_repo_context")
+        if isinstance(state, dict) and "is_repo_context" in state
+        else session_data.get("is_repo_context", False)
+    )
+    is_repo_context = bool(raw_is_repo_context) or ("AGENTS.md" in merged_refs)
+    session_data["is_repo_context"] = is_repo_context
+    if isinstance(state, dict):
+        state["is_repo_context"] = is_repo_context
 
 
 def _extract_metadata(session_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -142,7 +208,7 @@ def _extract_metadata(session_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _migrate_snapshot_if_present(conn: sqlite3.Connection) -> None:
+def _migrate_snapshot_if_present(conn: _ConnAdapter) -> None:
     snapshot_candidates = [
         Path(tempfile.gettempdir()) / "betterbot_sessions_snapshot.json",
         Path(__file__).parent / "betterbot_sessions_snapshot.json",
@@ -190,7 +256,7 @@ def _migrate_snapshot_if_present(conn: sqlite3.Connection) -> None:
 
 
 def init_db() -> None:
-    """Initializes the SQLite sessions table, runs idempotent migrations, and imports legacy JSON snapshots."""
+    """Initializes the sessions table, runs idempotent migrations, and imports legacy JSON snapshots."""
     with _get_conn() as conn:
         conn.execute(
             """
@@ -206,13 +272,19 @@ def init_db() -> None:
             )
             """
         )
-        existing_cols = {
-            row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
-        }
-        if "owner_id" not in existing_cols:
+        if conn.is_postgres:
             conn.execute(
-                "ALTER TABLE sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'master'"
+                "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS owner_id TEXT NOT NULL DEFAULT 'master'"
             )
+        else:
+            existing_cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+            }
+            if "owner_id" not in existing_cols:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN owner_id TEXT NOT NULL DEFAULT 'master'"
+                )
         conn.execute(
             "UPDATE sessions SET owner_id = 'master' WHERE owner_id IS NULL OR TRIM(owner_id) = ''"
         )
@@ -255,13 +327,13 @@ def save_session(session_id: str, session_data: Dict[str, Any], owner_id: str) -
                 session_id, owner_id, title, target_type, status,
                 created_at, updated_at, state_json
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(session_id) DO UPDATE SET
-                title = excluded.title,
-                target_type = excluded.target_type,
-                status = excluded.status,
-                updated_at = excluded.updated_at,
-                state_json = excluded.state_json
-            WHERE sessions.owner_id = excluded.owner_id
+            ON CONFLICT (session_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                target_type = EXCLUDED.target_type,
+                status = EXCLUDED.status,
+                updated_at = EXCLUDED.updated_at,
+                state_json = EXCLUDED.state_json
+            WHERE sessions.owner_id = EXCLUDED.owner_id
             """,
             (
                 session_id,
@@ -489,13 +561,13 @@ def import_workspace_sessions(owner_id: str, sessions_payload: Any) -> Dict[str,
                     session_id, owner_id, title, target_type, status,
                     created_at, updated_at, state_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(session_id) DO UPDATE SET
-                    title = excluded.title,
-                    target_type = excluded.target_type,
-                    status = excluded.status,
-                    updated_at = excluded.updated_at,
-                    state_json = excluded.state_json
-                WHERE sessions.owner_id = excluded.owner_id
+                ON CONFLICT (session_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    target_type = EXCLUDED.target_type,
+                    status = EXCLUDED.status,
+                    updated_at = EXCLUDED.updated_at,
+                    state_json = EXCLUDED.state_json
+                WHERE sessions.owner_id = EXCLUDED.owner_id
                 """,
                 (
                     sid,

@@ -51,12 +51,41 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(17, 18, 22, 0.14) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: rgba(17, 18, 22, 0.14);
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(17, 18, 22, 0.28);
+  }
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 }
 
 @layer utilities {
+  /* Luminous Atmospheric Prism Mesh Canvas Behind Solid White Surfaces */
+  .bg-prism-canvas {
+    background-color: #F8F9FB;
+    background-image:
+      radial-gradient(ellipse 72% 78% at 10% 4%, rgba(251, 146, 60, 0.40) 0%, rgba(249, 115, 22, 0.18) 44%, rgba(251, 146, 60, 0) 78%),
+      radial-gradient(ellipse 55% 65% at 24% 34%, rgba(253, 186, 116, 0.26) 0%, rgba(251, 146, 60, 0.08) 48%, rgba(251, 146, 60, 0) 80%),
+      radial-gradient(ellipse 62% 72% at 52% 2%, rgba(129, 140, 248, 0.32) 0%, rgba(129, 140, 248, 0.12) 46%, rgba(129, 140, 248, 0) 78%),
+      radial-gradient(ellipse 65% 74% at 90% 0%, rgba(56, 189, 248, 0.34) 0%, rgba(56, 189, 248, 0.12) 45%, rgba(56, 189, 248, 0) 78%);
+    background-attachment: fixed;
+  }
+
   /* Glossy Obsidian Tactile Primary Button + Subtle Prismatic Rim Shimmer */
   .btn-obsidian {
     position: relative;
@@ -146,7 +175,7 @@
     opacity: 1;
   }
 
-  /* Floating Chat Composer Prism Focus-Within Aura */
+  /* Floating Chat Composer Permanent 1px Prism Edge + Focus-Within Aura */
   .prism-composer {
     position: relative;
     transition: border-color 180ms ease-out, box-shadow 180ms ease-out;
@@ -161,7 +190,7 @@
     -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
     mask-composite: exclude;
-    opacity: 0;
+    opacity: 0.45;
     transition: opacity 180ms ease-out;
     pointer-events: none;
   }
@@ -176,13 +205,13 @@
     opacity: 1;
   }
 
-  /* Porcelain Elevated Card */
+  /* Porcelain Elevated Card — Strict Solid #FFFFFF Over Atmospheric Canvas */
   .card-porcelain {
     background-color: #FFFFFF;
-    border: 1px solid var(--color-hairline);
+    border: 1px solid rgba(17, 18, 22, 0.08);
     box-shadow:
-      0 1px 2px rgba(17, 18, 22, 0.03),
-      0 8px 24px -12px rgba(17, 18, 22, 0.06);
+      0 2px 6px rgba(17, 18, 22, 0.03),
+      0 12px 32px -16px rgba(17, 18, 22, 0.08);
   }
 }
 

@@ -11,6 +11,7 @@ import {
 import { motion } from 'motion/react';
 import type { SessionSummary } from '../../types/api';
 import { decodeHtmlEntities, formatRelativeTime } from '../../utils/text';
+import { Tooltip } from '../Tooltip';
 
 interface HistoryDrawerProps {
   isOpen: boolean;
@@ -162,14 +163,16 @@ export function HistoryDrawer({
               <span className="font-mono tabular-nums">{sessions.length}</span> סשנים
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="סגור ספריית היסטוריה"
-            className="p-1.5 rounded-md border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
-          >
-            <X size={15} />
-          </button>
+          <Tooltip content="סגור ספריית היסטוריה" placement="left">
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="סגור ספריית היסטוריה"
+              className="p-1.5 rounded-md border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
+            >
+              <X size={15} />
+            </button>
+          </Tooltip>
         </div>
 
         {/* Search & Filter Controls */}
@@ -328,27 +331,31 @@ export function HistoryDrawer({
                   {/* Row Actions */}
                   {!isEditing && (
                     <div className="flex items-center gap-1 shrink-0 pt-0.5">
-                      <button
-                        type="button"
-                        onClick={() => startRename(s)}
-                        title="שנה שם"
-                        className="p-1.5 rounded-sm text-muted hover:text-obsidian hover:bg-hover canon-transition cursor-pointer"
-                      >
-                        <PencilSimple size={14} />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={deletingId === s.session_id || isStreaming}
-                        onClick={() => handleDeleteClick(s.session_id)}
-                        title={isConfirmingDel ? 'לחץ שוב לאישור מחיקה' : 'מחק יצירה'}
-                        className={`px-1.5 py-1 rounded-sm text-xs canon-transition cursor-pointer ${
-                          isConfirmingDel
-                            ? 'bg-crimson text-white font-medium'
-                            : 'text-muted hover:text-crimson hover:bg-crimson-tint'
-                        }`}
-                      >
-                        {isConfirmingDel ? 'בטוח?' : <Trash size={14} />}
-                      </button>
+                      <Tooltip content="שנה שם">
+                        <button
+                          type="button"
+                          onClick={() => startRename(s)}
+                          aria-label="שנה שם"
+                          className="p-1.5 rounded-sm text-muted hover:text-obsidian hover:bg-hover canon-transition cursor-pointer"
+                        >
+                          <PencilSimple size={14} />
+                        </button>
+                      </Tooltip>
+                      <Tooltip content={isConfirmingDel ? 'לחץ שוב לאישור מחיקה' : 'מחק יצירה'}>
+                        <button
+                          type="button"
+                          disabled={deletingId === s.session_id || isStreaming}
+                          onClick={() => handleDeleteClick(s.session_id)}
+                          aria-label={isConfirmingDel ? 'לחץ שוב לאישור מחיקה' : 'מחק יצירה'}
+                          className={`px-1.5 py-1 rounded-sm text-xs canon-transition cursor-pointer ${
+                            isConfirmingDel
+                              ? 'bg-crimson text-white font-medium'
+                              : 'text-muted hover:text-crimson hover:bg-crimson-tint'
+                          }`}
+                        >
+                          {isConfirmingDel ? 'בטוח?' : <Trash size={14} />}
+                        </button>
+                      </Tooltip>
                     </div>
                   )}
                 </div>
