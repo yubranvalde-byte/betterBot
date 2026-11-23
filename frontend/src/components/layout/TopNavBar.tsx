@@ -118,8 +118,11 @@ export function TopNavBar({
     <header className="sticky top-0 z-30 h-[58px] bg-white border-b border-[rgba(17,18,22,0.08)] shadow-[0_1px_2px_rgba(17,18,22,0.02)] px-4 lg:px-6 flex items-center justify-between gap-3">
       {/* Right (RTL start): Wordmark + Live Telemetry Conduit Pill + Session Selector */}
       <div className="flex items-center gap-2.5 min-w-0 shrink-0">
-        <span className="font-display text-xl font-bold tracking-[-0.025em] text-obsidian leading-none">
-          CANON
+        <span
+          dir="ltr"
+          className="font-display text-xl font-bold tracking-[-0.025em] leading-none bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach bg-clip-text text-transparent select-none"
+        >
+          BetterBot
         </span>
 
         {/* Live Telemetry Conduit Pill */}
