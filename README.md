@@ -45,8 +45,10 @@ flowchart TD
     UserInput --> Gate1
     CheckBlueprint -- "כן (סיום ראיון)" --> Construct["Node 2: The Construct 2.0\n(מהדר סקילים ופרומפטים)"]
 
-    Construct --> Gate2["Gate 2: gemini-decision-1\nDynamic 6/7-Point Rubric Scorer"]
-    Upgrader --> Gate2
+    Construct --> Gate15["Gate 1.5: validators.py\nDeterministic Structural Linter (0 טוקנים)"]
+    Upgrader --> Gate15
+    Gate15 -- "FAIL (ניסיון < 1)" --> Upgrader
+    Gate15 -- "PASS או תקרה (1)" --> Gate2["Gate 2: gemini-decision-1\nDynamic 6/7-Point Rubric Scorer"]
 
     Gate2 --> FastCheck{"Fast Pass >= 82%\n& Min Dim >= 3.0?"}
     FastCheck -- "כן (0 טוקנים)" --> EndSuccess([PASS: אישור מהיר ושמירה ב-DB])
@@ -70,10 +72,12 @@ flowchart TD
    * מראיין את המשתמש בעברית (עד 3 סבבים) בעקרון **Inference over Interrogation**, ומפיק תבנית `<ARTIFACT_BLUEPRINT>` הכוללת `<META>`, `<IDENTITY_AND_STANCE>`, `<ROUTING_AND_TRIGGERS>`, `<EXECUTION_ARCHITECTURE>` ו-`<OUTPUT_CONTRACT>` (תוך תמיכה מלאה לאחור ב-`<GEM_BLUEPRINT>`). כאשר `target_type == "SKILL_SUITE"`, התבנית כוללת גם `<SUITE_TOPOLOGY>` המגדיר 2–4 סקילים אטומיים (`slug`, `single_responsibility`, `positive_triggers`, ו-`negative_triggers_vs_siblings`).
 3. **Node 2 — The Construct 2.0 (`The Hybrid Compiler`):**
    * מופעל על ידי `COMPILER_MODEL` (`gemini-4-neon` עם Fallback אוטומטי ל-`FALLBACK_MODEL` / `gemini-4-hydrogen`), עם `thinking_level="medium"` לחבילות רב-קובציות (`SKILL_PACKAGE` / `HYBRID_BUNDLE` / `SKILL_SUITE` / קובצי `references/`) ו-`thinking_level="low"` ל-`SYSTEM_PROMPT` קל. מפצל בלוקי `### FILE: <path>` מקוננים (כגון `references/...`, `skills/<sub_slug>/SKILL.md`, ו-`skills/<sub_slug>/references/<file>.md`) דרך סניטציית נתיבים קשיחה (`normalize_artifact_path` הדוחה נתיבים ריקים, אבסולוטיים או קטעי `..`) לתוך מפת `state["reference_files"]` האחידה.
-4. **Gate 2 & Node 4 — The Adjudicator 2.0 (`gemini-decision-1` + `get_rubric_questions`):**
+4. **Gate 1.5 — לינטר מבני דטרמיניסטי (`validators.py` — `gate_1_5_linter`, 0 טוקנים):**
+   * מופעל אוטומטית אחרי `The Construct 2.0` ו-`The Upgrader 2.0` ולפני Gate 2 (`gemini-decision-1`) כדי לתפוס כשלים מבניים אובייקטיביים באפס קריאות LLM: תקינות YAML Frontmatter (`name`, `description`), קישורי `references/*` שבורים או קבצים יתומים (כולל רזולוציית נתיבים יחסית ל-`skills/<sub_slug>/references/*` ב-`SKILL_SUITE`), טופולוגיית 2–4 סקילים ב-`SKILL_SUITE`, ובטיחות נתיבים (`normalize_artifact_path`). מוגבל לתקרה ייעודית של `MAX_LINTER_RETRIES = 1` דרך `linter_retries` מבלי לצרוך את תקציב ה-QA של Gate 2 (`MAX_QA_ITERATIONS = 2`).
+5. **Gate 2 & Node 4 — The Adjudicator 2.0 (`gemini-decision-1` + `get_rubric_questions`):**
    * **Stage A (דירוג כמותי דינמי ב-v1beta/decisions ב-~500ms):** מופעל באמצעות `get_rubric_questions(target_type)` — שומר על 6 הממדים הסטנדרטיים (`intent_alignment`, `token_density_no_bloat`, `trigger_precision`, `progressive_disclosure`, `actionable_clarity`, ו-`output_contract_strength`) עבור `SYSTEM_PROMPT`, `SKILL_PACKAGE` ו-`HYBRID_BUNDLE`, ומוסיף דינמית ממד שביעי `trigger_deconfliction` (0–5) עבור `SKILL_SUITE` בלבד — תוך העברת מלוא תוכן `reference_files` (כולל קובצי `skills/<sub_slug>/SKILL.md`) להערכה, ובנוסף `challenger_beats_champion` (עם עיגון כוונות Manual Override) ברצפי רגרסיה/עריכה.
    * **Stage B (Fast Pass / Plateau Breaker / Pinpoint Fail):** מנרמל ציונים משוקללים לרובריקות של 6 ו-7 ממדים, מאשר מיידית ללא קריאת LLM יצרנית כשהציון המשוקלל `>= 0.82` (וכל ממד `>= 3.0`), עוצר ב-`ESCALATE` בזיהוי קיפאון (עלייה `< 0.02`), או מפיק הוראות תיקון כירורגיות (`correction_directive`) הממוקדות בממדים החלשים או בסקילים מתנגשים באמצעות `ADJUDICATOR_MODEL` (`gemini-4-neon`, `thinking_level="low"`, עם Fallback ל-`gemini-4-hydrogen`) — מוגבל ל-`MAX_QA_ITERATIONS = 2`.
-5. **Node 3 — The Upgrader 2.0 (`Atomic Delta-Patcher`):**
+6. **Node 3 — The Upgrader 2.0 (`Atomic Delta-Patcher`):**
    * מופעל על ידי `UPGRADER_MODEL` (`gemini-4-neon`, `thinking_level="medium"`, עם Fallback ל-`gemini-4-hydrogen`) ופועל בשיטת **Delta-Patching** במקום שכתוב מלא: פולט רק בלוקי `### FILE: <path>` שנוספו/שונו והנחיות `### DELETE: <path>` אופציונליות, ממזג את השינויים אל `state["reference_files"]` תוך שמירת שאר הקבצים ללא מגע, ומסנכרן אטומית את `<ARTIFACT_BLUEPRINT>` ואת קובצי הליבה בעקבות כשלון QA או פקודת `[MANUAL OVERRIDE]`.
 
 ---
@@ -135,16 +139,19 @@ python -m venv venv
 
 ```text
 BetterBot/
-├── server.py            # שרת FastAPI: הזרמת SSE, בידוד מרחבים (X-Workspace-ID / X-Master-Key), ייבוא/ייצוא JSON, CRUD, ייצוא .ZIP היררכי + BETTERBOT_INSTALL.md והקשר חי לבטי
-├── storage.py           # שכבת אחסון ב-SQLite לפי owner_id (מיגרציות אידמפוטנטיות, ייצוא/ייבוא JSON והידרציית reference_files מקוננים)
-├── main.py              # מנוע LangGraph 2.0, gemini-decision-1 (Gate 1/2), תמיכת SKILL_SUITE, סניטציית נתיבים, Upgrader Delta-Patching ורובריקת 6/7 ממדים
-├── prompts.py           # HELPER_READINESS_QUESTIONS (Orthogonality Rule), get_rubric_questions דינמי (trigger_deconfliction), <SUITE_TOPOLOGY> ופרומפטי 2.0 + בטי
-├── static/              # ממשק ה-Web (Obsidian & Neural Glass Studio v3.6)
-│   ├── index.html       # מעטפת 4 חלונות, ספריית היסטוריה (כולל SUITE), מודאל Workspace Sync וניקוד רובריקה
-│   ├── styles.css       # עיצוב Obsidian Slate, עץ קבצים מקובץ (SKILL_SUITE), תגיות יעד ומודאל סנכרון
-│   └── app.js           # בורר עץ תיקיות SKILL_SUITE, סקורקארד 7 ממדים, אימות קובץ פעיל, בידוד מרחבים וגיבוי JSON
-├── requirements.txt     # חבילות Python וגרסאות
-├── render.yaml          # קובץ Blueprint לפריסה ב-Render כולל משתני המודלים וה-DB
-├── .gitignore           # החרגת סביבה, סודות ומסדי נתונים מקומיים
-└── README.md            # תיעוד הפרויקט
+├── server.py                  # שרת FastAPI: הזרמת SSE, בידוד מרחבים (X-Workspace-ID / X-Master-Key), ייבוא/ייצוא JSON, CRUD, ייצוא .ZIP היררכי + BETTERBOT_INSTALL.md והקשר חי לבטי
+├── storage.py                 # שכבת אחסון ב-SQLite לפי owner_id (מיגרציות אידמפוטנטיות, ייצוא/ייבוא JSON והידרציית reference_files מקוננים)
+├── main.py                    # מנוע LangGraph 2.0, gemini-decision-1 (Gate 1/2), Gate 1.5, תמיכת SKILL_SUITE, Upgrader Delta-Patching ורובריקת 6/7 ממדים
+├── validators.py              # לינטר מבני דטרמיניסטי Gate 1.5 באפס טוקנים (YAML frontmatter, הפניות, SKILL_SUITE topology) ו-normalize_artifact_path
+├── prompts.py                 # טוען stdlib דק + רובריקות דינמיות (HELPER_READINESS_QUESTIONS, get_rubric_questions עם trigger_deconfliction)
+├── prompts/                   # תבניות Markdown מופרדות פר-סוכן (helper, construct, upgrader, adjudicator_baseline, adjudicator_regression, betty_*)
+├── frontend/                  # קוד המקור של הממשק (React + TypeScript + Vite + Tailwind) הנבנה ישירות ל-static/
+├── static/                    # תוצרי הפרודקשן המהודרים ע"י Vite (index.html, favicon.svg, assets/*)
+├── scripts/
+│   └── check_invariants.py    # שער אימות ארכיטקטוני באפס תלויות ו-0 קריאות LLM (ענף, סניטציית נתיבים, רובריקות, קבצים ולינטר)
+├── AGENTS.md                  # חוזה תפעולי, מפת ארכיטקטורה וכללי אימות לסוכני קוד
+├── requirements.txt           # חבילות Python וגרסאות
+├── render.yaml                # קובץ Blueprint לפריסה ב-Render כולל משתני המודלים וה-DB
+├── .gitignore                 # החרגת סביבה, סודות ומסדי נתונים מקומיים
+└── README.md                  # תיעוד הפרויקט
 ```

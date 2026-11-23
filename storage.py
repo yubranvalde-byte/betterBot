@@ -67,8 +67,8 @@ def _normalize_rel_path(raw_path: Any) -> str:
         return ""
     if (
         re.match(r"^[a-zA-Z]:", cleaned)
-        or cleaned.startswith("\\\\")
-        or cleaned.startswith("//")
+        or cleaned.startswith("\\")
+        or cleaned.startswith("/")
     ):
         return ""
     cleaned = cleaned.replace("\\", "/").strip("/")

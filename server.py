@@ -26,10 +26,12 @@ from main import (
     has_blueprint_xml,
     node_adjudicator,
     node_construct,
+    node_gate_1_5_linter,
     node_helper,
     node_upgrader,
     route_from_adjudicator,
     route_from_helper,
+    route_from_linter,
     route_from_start,
 )
 from prompts import BETTY_PROMPT_ADVISOR_PROMPT, BETTY_TECH_SUPPORT_PROMPT
@@ -308,6 +310,8 @@ def create_new_session(
         "challenger_prompt": "",
         "error_log": [],
         "iteration_count": 0,
+        "linter_retries": 0,
+        "linter_result": {},
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
         "reference_files": {},
@@ -802,6 +806,7 @@ async def stream_factory_execution(
             f"[MANUAL OVERRIDE] {user_msg}"
         ]
         state["iteration_count"] = 1
+        state["linter_retries"] = 0
         session["timeline"].append(
             {
                 "id": str(uuid.uuid4())[:8],
@@ -847,6 +852,7 @@ async def stream_factory_execution(
                 node_labels = {
                     "node_1_helper": ("Node 1: The Helper", "מנתח דרישות ומנסח שאלות / Blueprint..."),
                     "node_2_construct": ("Node 2: The Construct", "מהדר את ה-Blueprint לתוצר סופי..."),
+                    "gate_1_5_linter": ("Gate 1.5: Structural Linter", "מאמת מבנה YAML, הפניות וקובצי חבילה (0 טוקנים)..."),
                     "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-Blueprint והתוצר..."),
                     "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
                 }
@@ -951,7 +957,7 @@ async def stream_factory_execution(
                             node_tel,
                         )
                     )
-                    next_node = "node_4_adjudicator"
+                    next_node = "gate_1_5_linter"
 
                 elif current_node == "node_3_upgrader":
                     session["status"] = "compiling"
@@ -972,7 +978,42 @@ async def stream_factory_execution(
                             node_tel,
                         )
                     )
-                    next_node = "node_4_adjudicator"
+                    next_node = "gate_1_5_linter"
+
+                elif current_node == "gate_1_5_linter":
+                    session["status"] = "compiling"
+                    update = await asyncio.to_thread(node_gate_1_5_linter, state)
+                    _apply_node_update(state, update)
+                    node_tel = (update.get("model_telemetry") or {}).get("gate_1_5_linter") or {}
+                    lint_res = state.get("linter_result") or {}
+                    next_node = route_from_linter(state)
+
+                    if lint_res.get("passed"):
+                        lint_title = "Gate 1.5 Linter: PASS"
+                        lint_detail = "בדיקת מבנה דטרמיניסטית עברה בהצלחה (0 טוקנים). ממשיך ל-Gate 2."
+                        lint_status = "success"
+                    elif lint_res.get("will_retry"):
+                        lint_title = "Gate 1.5 Linter: FAIL -> Upgrader"
+                        lint_detail = lint_res.get("correction_directive") or "אותרו כשלים מבניים; מעביר לתיקון אטומי."
+                        lint_status = "warning"
+                    else:
+                        lint_title = "Gate 1.5 Linter: Cap Reached -> Gate 2"
+                        lint_detail = "תקרת ניסיונות הלינטר מוצתה; ממשיך ל-Adjudicator."
+                        lint_status = "warning"
+
+                    session["timeline"].append(
+                        _attach_timeline_telemetry(
+                            {
+                                "id": str(uuid.uuid4())[:8],
+                                "timestamp": step_time,
+                                "node": "gate_1_5_linter",
+                                "title": lint_title,
+                                "detail": lint_detail,
+                                "status": lint_status,
+                            },
+                            node_tel,
+                        )
+                    )
 
                 elif current_node == "node_4_adjudicator":
                     session["status"] = "compiling"

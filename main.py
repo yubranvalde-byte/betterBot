@@ -23,6 +23,7 @@ from prompts import (
     UPGRADER_PROMPT,
     get_rubric_questions,
 )
+from validators import normalize_artifact_path, validate_compiled_artifacts
 
 VALID_TARGET_TYPES = ("SKILL_PACKAGE", "SYSTEM_PROMPT", "HYBRID_BUNDLE", "SKILL_SUITE")
 
@@ -68,6 +69,8 @@ class FactoryState(TypedDict, total=False):
     rubric_scores: Annotated[Dict[str, float], replace_value]
     readiness_scores: Annotated[Dict[str, Any], replace_value]
     is_manual_override: Annotated[bool, replace_value]
+    linter_retries: Annotated[int, replace_value]
+    linter_result: Annotated[Dict[str, Any], replace_value]
     model_telemetry: Annotated[Dict[str, Any], merge_dicts]
     model_overrides: Annotated[Dict[str, str], replace_value]
 
@@ -88,6 +91,7 @@ UPGRADER_MODEL = (os.environ.get("UPGRADER_MODEL") or COMPILER_MODEL).strip() or
 ADJUDICATOR_MODEL = (os.environ.get("ADJUDICATOR_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 BETTY_MODEL = (os.environ.get("BETTY_MODEL") or FAST_MODEL).strip() or FAST_MODEL
 MAX_QA_ITERATIONS = 2
+MAX_LINTER_RETRIES = 1
 
 NODE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "node_1_helper": {"model": HELPER_MODEL, "thinking_level": "low"},
@@ -264,6 +268,13 @@ def get_node_routing_plan(
     role: str, state: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     canonical_role = ROLE_ALIASES.get(role, role)
+    if canonical_role == "gate_1_5_linter":
+        return {
+            "role": "gate_1_5_linter",
+            "model": "deterministic-linter",
+            "thinking_level": "none",
+            "fallback_chain": [],
+        }
     level_override: Optional[str] = None
     if canonical_role == "node_2_construct" and state:
         xml_text = state.get("challenger_xml") or state.get("champion_xml") or ""
@@ -603,29 +614,6 @@ def extract_blueprint_meta(xml_text: str) -> Dict[str, str]:
     return {"target_type": raw_target, "slug_name": slug_name}
 
 
-def normalize_artifact_path(raw_path: str) -> str:
-    """Normalizes relative artifact paths and rejects traversal, drive prefixes, or UNC/empty paths."""
-    if not isinstance(raw_path, str):
-        return ""
-    cleaned = raw_path.strip().strip("`\"'").strip()
-    if not cleaned or "\x00" in cleaned:
-        return ""
-    if (
-        re.match(r"^[a-zA-Z]:", cleaned)
-        or cleaned.startswith("\\\\")
-        or cleaned.startswith("//")
-    ):
-        return ""
-    cleaned = cleaned.replace("\\", "/").strip("/")
-    if not cleaned:
-        return ""
-    segments = cleaned.split("/")
-    for seg in segments:
-        if not seg or seg in (".", "..") or ":" in seg:
-            return ""
-    return "/".join(segments)
-
-
 def _extract_compilation_body(raw_text: str) -> Tuple[str, str]:
     """Extracts any `<compilation_check>` block and unwraps an outer markdown fence."""
     if not raw_text:
@@ -900,6 +888,7 @@ def node_construct(state: FactoryState):
         "challenger_prompt": primary_prompt,
         "reference_files": ref_files,
         "target_type": meta["target_type"],
+        "linter_retries": 0,
         "model_telemetry": {
             "node_2_construct": telemetry,
             "last_execution": telemetry,
@@ -940,9 +929,10 @@ def node_upgrader(state: FactoryState):
     """
     print(">>> Executing Node 3: The Upgrader")
 
-    champion_xml = state.get("champion_xml", "")
+    champion_xml = state.get("champion_xml") or state.get("challenger_xml", "")
+    base_prompt = state.get("champion_prompt") or state.get("challenger_prompt", "")
     champion_prompt = format_artifact_with_references(
-        state.get("champion_prompt", ""), state.get("reference_files")
+        base_prompt, state.get("reference_files")
     )
     error_log = state.get("error_log", [])
     is_override = bool(state.get("is_manual_override")) or bool(
@@ -992,7 +982,7 @@ def node_upgrader(state: FactoryState):
         flags=re.DOTALL | re.IGNORECASE,
     ).strip()
     if not stripped_primary:
-        primary_prompt = state.get("champion_prompt", "")
+        primary_prompt = base_prompt
     elif (
         meta["target_type"] == "HYBRID_BUNDLE"
         and ("SYSTEM_PROMPT.md" in merged_refs or "SKILL.md" in merged_refs)
@@ -1350,6 +1340,61 @@ def node_adjudicator(state: FactoryState):
     return state_update
 
 
+def node_gate_1_5_linter(state: FactoryState):
+    """
+    Gate 1.5: Zero-token deterministic structural linter between Construct/Upgrader and Gate 2.
+    Enforces YAML frontmatter, reference link integrity, SKILL_SUITE topology, and path safety
+    using a dedicated `linter_retries` cap without consuming `iteration_count`.
+    """
+    print(">>> Executing Gate 1.5: Structural Linter")
+    t0 = time.perf_counter()
+    result = validate_compiled_artifacts(state)
+    latency_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+
+    retries = int(state.get("linter_retries", 0) or 0)
+    will_retry = (not result["passed"]) and (retries < MAX_LINTER_RETRIES)
+    new_retries = retries + 1 if will_retry else retries
+    linter_result = {
+        **result,
+        "will_retry": will_retry,
+        "retries": new_retries,
+    }
+    telemetry = {
+        "role": "gate_1_5_linter",
+        "configured_model": "deterministic-linter",
+        "model": "deterministic-linter",
+        "thinking_level": "none",
+        "fallback_used": False,
+        "fallback_from": None,
+        "latency_ms": latency_ms,
+    }
+
+    if result["passed"]:
+        print(f"    -> [Gate 1.5] PASS (0 LLM tokens, {latency_ms:.2f}ms)")
+    elif will_retry:
+        print(
+            f"    -> [Gate 1.5] FAIL ({len(result['errors'])} errors); routing to Upgrader "
+            f"(retry {new_retries}/{MAX_LINTER_RETRIES})"
+        )
+    else:
+        print(
+            f"    -> [Gate 1.5] FAIL ({len(result['errors'])} errors); retry cap reached "
+            f"({retries}/{MAX_LINTER_RETRIES}), proceeding to Gate 2"
+        )
+
+    update: Dict[str, Any] = {
+        "linter_retries": new_retries,
+        "linter_result": linter_result,
+        "model_telemetry": {
+            "gate_1_5_linter": telemetry,
+            "last_execution": telemetry,
+        },
+    }
+    if will_retry:
+        update["error_log"] = [f"[LINTER FAIL] {result['correction_directive']}"]
+    return update
+
+
 # ==========================================
 # PHASE 5: Graph Routing & Compilation
 # ==========================================
@@ -1372,6 +1417,13 @@ def route_from_helper(state: FactoryState):
     if has_blueprint_xml(challenger_xml):
         return "node_2_construct"
     return END
+
+
+def route_from_linter(state: FactoryState):
+    linter_result = state.get("linter_result") or {}
+    if linter_result.get("will_retry"):
+        return "node_3_upgrader"
+    return "node_4_adjudicator"
 
 
 def route_from_adjudicator(state: FactoryState):
@@ -1409,14 +1461,16 @@ builder = StateGraph(FactoryState)
 # 1. Add Nodes
 builder.add_node("node_1_helper", node_helper)
 builder.add_node("node_2_construct", node_construct)
+builder.add_node("gate_1_5_linter", node_gate_1_5_linter)
 builder.add_node("node_3_upgrader", node_upgrader)
 builder.add_node("node_4_adjudicator", node_adjudicator)
 
 # 2. Add Edges
 builder.add_conditional_edges(START, route_from_start)
 builder.add_conditional_edges("node_1_helper", route_from_helper)
-builder.add_edge("node_2_construct", "node_4_adjudicator")
-builder.add_edge("node_3_upgrader", "node_4_adjudicator")
+builder.add_edge("node_2_construct", "gate_1_5_linter")
+builder.add_edge("node_3_upgrader", "gate_1_5_linter")
+builder.add_conditional_edges("gate_1_5_linter", route_from_linter)
 builder.add_conditional_edges("node_4_adjudicator", route_from_adjudicator)
 
 # 3. Compile Graph
@@ -1445,6 +1499,8 @@ def run_factory():
         "challenger_prompt": "",
         "error_log": [],
         "iteration_count": 0,
+        "linter_retries": 0,
+        "linter_result": {},
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
         "reference_files": {},
@@ -1516,6 +1572,7 @@ def run_factory():
 
             state["error_log"].append(f"[MANUAL OVERRIDE] {user_correction}")
             state["iteration_count"] = 1
+            state["linter_retries"] = 0
             continue
 
 
