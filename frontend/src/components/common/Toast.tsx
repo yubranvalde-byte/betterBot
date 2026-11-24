@@ -47,7 +47,7 @@ export function Toast({ toast, onMouseEnter, onMouseLeave, onDismiss }: ToastPro
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onClick={onDismiss}
-      className={`fixed bottom-5 left-5 z-50 max-w-md cursor-pointer rounded-md border px-4 py-2.5 text-sm shadow-xl shadow-obsidian/8 flex items-center gap-2.5 canon-transition ${
+      className={`fixed bottom-5 inset-x-4 sm:inset-x-auto sm:left-5 z-50 sm:max-w-md cursor-pointer rounded-md border px-4 py-2.5 text-sm shadow-xl shadow-obsidian/8 flex items-center gap-2.5 canon-transition ${
         isError
           ? 'bg-crimson-tint border-crimson/40 text-ink'
           : 'bg-surface border-hairline-strong text-ink'

@@ -104,10 +104,10 @@ export function WorkspaceSyncModal({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
-        className="w-full max-w-lg bg-surface border border-hairline-strong rounded-lg shadow-xl shadow-obsidian/8 overflow-hidden"
+        className="w-full max-w-lg max-h-[calc(100dvh-2rem)] flex flex-col bg-surface border border-hairline-strong rounded-lg shadow-xl shadow-obsidian/8 overflow-hidden"
       >
         {/* Header */}
-        <div className="px-6 py-4 border-b border-hairline bg-porcelain flex items-center justify-between gap-3">
+        <div className="px-4 sm:px-6 py-3.5 sm:py-4 border-b border-hairline bg-porcelain flex items-center justify-between gap-3 shrink-0">
           <div className="flex items-center gap-2">
             <Key size={16} className="text-obsidian" />
             <h2
@@ -128,10 +128,10 @@ export function WorkspaceSyncModal({
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6">
+        <div className="p-4 sm:p-6 space-y-5 sm:space-y-6 overflow-y-auto">
           {/* Status Card */}
           <div className="border border-hairline rounded-md bg-porcelain p-4 space-y-2.5">
-            <div className="flex items-center justify-between gap-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
               <span className="text-slate-ink font-medium">מצב נוכחי:</span>
               <span
                 className={`font-mono text-[11px] px-2 py-0.5 rounded-sm border inline-flex items-center gap-1.5 ${
@@ -199,7 +199,7 @@ export function WorkspaceSyncModal({
             )}
 
             {!isMasterMode ? (
-              <form onSubmit={handleSubmit} className="flex items-center gap-2">
+              <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <input
                   ref={inputRef}
                   type="password"
@@ -208,12 +208,12 @@ export function WorkspaceSyncModal({
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
                   placeholder="הזן MASTER_WORKSPACE_KEY..."
-                  className="flex-1 h-9 rounded-md border border-hairline-strong bg-surface px-3 font-mono text-xs text-ink placeholder:text-muted focus:border-obsidian focus:outline-none"
+                  className="w-full sm:flex-1 h-9 rounded-md border border-hairline-strong bg-surface px-3 font-mono text-xs text-ink placeholder:text-muted focus:border-obsidian focus:outline-none"
                 />
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="btn-obsidian h-9 px-3.5 rounded-md text-xs font-medium shrink-0 cursor-pointer"
+                  className="btn-obsidian w-full sm:w-auto h-9 px-3.5 rounded-md text-xs font-medium shrink-0 cursor-pointer"
                 >
                   {submitting ? 'מאמת...' : 'התחבר כ-Master'}
                 </button>

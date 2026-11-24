@@ -335,11 +335,15 @@ export function App() {
       }
       if (isHistoryOpen) {
         setIsHistoryOpen(false);
+        return;
+      }
+      if (isBettyOpen && window.innerWidth < 1024) {
+        setIsBettyOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isSyncModalOpen, isHistoryOpen]);
+  }, [isSyncModalOpen, isHistoryOpen, isBettyOpen]);
 
   const handleCreateNewSession = useCallback(async () => {
     if (isStreaming) return;

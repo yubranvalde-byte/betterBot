@@ -114,196 +114,243 @@ export function TopNavBar({
     isStreaming ? 'active' : isPassed ? 'completed' : 'idle',
   ];
 
-  return (
-    <header className="sticky top-0 z-30 h-[58px] bg-white border-b border-[rgba(17,18,22,0.08)] shadow-[0_1px_2px_rgba(17,18,22,0.02)] px-4 lg:px-6 flex items-center justify-between gap-3">
-      {/* Right (RTL start): Wordmark + Live Telemetry Conduit Pill + Session Selector */}
-      <div className="flex items-center gap-2.5 min-w-0 shrink-0">
-        <span
-          dir="ltr"
-          className="font-display text-xl font-bold tracking-[-0.025em] leading-none bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach bg-clip-text text-transparent select-none"
-        >
-          BetterBot
-        </span>
+  const renderNavButton = (
+    tab: (typeof NAV_TABS)[number],
+    variant: 'desktop' | 'mobile',
+  ) => {
+    const isActive = activeView === tab.id;
+    const notifyTone = notifications[tab.id];
+    const isMobile = variant === 'mobile';
 
-        {/* Live Telemetry Conduit Pill */}
-        <div
-          dir="ltr"
-          className={`hidden xl:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-mono tracking-wide border whitespace-nowrap ${
-            telemetryPill.tone === 'active'
-              ? 'bg-surface border-hairline-strong text-obsidian prism-aura'
-              : telemetryPill.tone === 'amber'
-              ? 'bg-amber-tint border-amber/30 text-amber'
-              : telemetryPill.tone === 'emerald'
-              ? 'bg-emerald-tint border-emerald/30 text-emerald prism-aura'
-              : telemetryPill.tone === 'crimson'
-              ? 'bg-crimson-tint border-crimson/30 text-crimson'
-              : 'bg-porcelain border-hairline text-slate-ink prism-aura'
+    return (
+      <button
+        key={isMobile ? tab.id : undefined}
+        type="button"
+        onClick={() => onSelectView(tab.id)}
+        aria-current={isActive ? 'page' : undefined}
+        className={`relative h-full inline-flex items-center whitespace-nowrap shrink-0 canon-transition cursor-pointer ${
+          isMobile ? 'px-1.5 sm:px-3 gap-1 sm:gap-1.5 text-xs sm:text-sm' : 'px-2 sm:px-2.5 gap-1.5 text-sm'
+        } ${
+          isActive
+            ? 'text-obsidian font-semibold'
+            : 'text-slate-ink hover:text-obsidian font-normal'
+        }`}
+      >
+        <span
+          className={`font-mono tabular-nums text-muted ${
+            isMobile ? 'text-[10px] sm:text-[11px]' : 'text-[11px]'
           }`}
+          dir="ltr"
         >
+          {tab.num}
+        </span>
+        <span
+          className={`font-mono text-[11px] text-muted ${isMobile ? 'hidden sm:inline' : ''}`}
+          aria-hidden="true"
+        >
+          /
+        </span>
+        <span>{tab.label}</span>
+
+        {tab.id === 'view-artifacts' && isPassed && (
+          <Tooltip content="PASS — מאושר" placement="bottom">
+            <span className="w-2 h-2 rounded-full bg-emerald shrink-0" />
+          </Tooltip>
+        )}
+
+        {tab.id === 'view-artifacts' && !isPassed && notifyTone && (
           <span
             className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-              telemetryPill.tone === 'active'
-                ? 'bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach animate-pulse'
-                : telemetryPill.tone === 'amber'
-                ? 'bg-amber animate-pulse'
-                : telemetryPill.tone === 'emerald'
+              notifyTone === 'pass'
                 ? 'bg-emerald'
-                : telemetryPill.tone === 'crimson'
+                : notifyTone === 'escalate'
                 ? 'bg-crimson'
-                : 'bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach'
+                : 'bg-prism-violet'
             }`}
-            aria-hidden="true"
           />
-          <span>{telemetryPill.text}</span>
-        </div>
+        )}
 
-        <Tooltip content="בחירת סשן וספריית היסטוריית יצירות" placement="bottom">
-          <button
-            type="button"
-            onClick={onToggleHistory}
-            aria-haspopup="dialog"
-            aria-expanded={isHistoryOpen}
-            className={`prism-interactive h-8 rounded-md border px-2.5 text-xs inline-flex items-center gap-2 max-w-[180px] xl:max-w-[230px] cursor-pointer ${
-              isHistoryOpen
-                ? 'border-obsidian bg-surface text-obsidian shadow-xs'
-                : 'border-hairline bg-surface hover:bg-porcelain text-ink'
+        {tab.id === 'view-qa' && (
+          <span
+            className={`font-mono tabular-nums text-slate-ink bg-recessed border border-hairline px-1.5 rounded-sm ${
+              isMobile ? 'text-[10px] sm:text-[11px]' : 'text-[11px]'
             }`}
           >
-            <ClockCounterClockwise size={14} className="text-slate-ink shrink-0" />
-            <span className="truncate font-medium">{decodedTitle}</span>
-            <span className="font-mono text-[11px] tabular-nums bg-surface border border-hairline px-1.5 rounded-sm text-slate-ink shrink-0">
-              {sessionCount}
-            </span>
-            <CaretDown size={12} className="text-muted shrink-0" />
-          </button>
-        </Tooltip>
-      </div>
+            {qaCount}
+          </span>
+        )}
 
-      {/* Center: 4 Numbered Workflow Tabs Linked by Micro-Conduits */}
-      <nav
-        aria-label="ניווט חלונות עבודה"
-        className="flex items-stretch h-full overflow-x-auto no-scrollbar gap-0.5 sm:gap-1"
-      >
-        {NAV_TABS.map((tab, idx) => {
-          const isActive = activeView === tab.id;
-          const notifyTone = notifications[tab.id];
+        {tab.id === 'view-pipeline' && isStreaming && (
+          <span className="w-1.5 h-1.5 rounded-full bg-prism-violet animate-pulse shrink-0" />
+        )}
 
-          return (
+        {isActive && (
+          <motion.span
+            layoutId={isMobile ? 'activeTabIndicatorMobile' : 'activeTabIndicatorDesktop'}
+            transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
+            className="absolute inset-x-1 bottom-0 h-[2px] bg-obsidian rounded-full"
+          >
+            <span
+              aria-hidden="true"
+              className="absolute inset-0 -top-1 rounded-full bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach blur-[8px] opacity-35"
+            />
+          </motion.span>
+        )}
+      </button>
+    );
+  };
+
+  return (
+    <header className="sticky top-0 z-30 bg-white border-b border-[rgba(17,18,22,0.08)] shadow-[0_1px_2px_rgba(17,18,22,0.02)]">
+      {/* Row 1: Primary Studio Bar (52px mobile, 58px desktop) */}
+      <div className="h-[52px] lg:h-[58px] px-2.5 sm:px-4 lg:px-6 flex items-center justify-between gap-1.5 sm:gap-2 lg:gap-3">
+        {/* Right (RTL start): Wordmark + Live Telemetry Conduit Pill + Session Selector */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 shrink-0">
+          <span
+            dir="ltr"
+            className="font-display text-[17px] sm:text-xl font-bold tracking-[-0.025em] leading-none bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach bg-clip-text text-transparent select-none"
+          >
+            BetterBot
+          </span>
+
+          {/* Live Telemetry Conduit Pill */}
+          <div
+            dir="ltr"
+            className={`hidden xl:inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-mono tracking-wide border whitespace-nowrap ${
+              telemetryPill.tone === 'active'
+                ? 'bg-surface border-hairline-strong text-obsidian prism-aura'
+                : telemetryPill.tone === 'amber'
+                ? 'bg-amber-tint border-amber/30 text-amber'
+                : telemetryPill.tone === 'emerald'
+                ? 'bg-emerald-tint border-emerald/30 text-emerald prism-aura'
+                : telemetryPill.tone === 'crimson'
+                ? 'bg-crimson-tint border-crimson/30 text-crimson'
+                : 'bg-porcelain border-hairline text-slate-ink prism-aura'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                telemetryPill.tone === 'active'
+                  ? 'bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach animate-pulse'
+                  : telemetryPill.tone === 'amber'
+                  ? 'bg-amber animate-pulse'
+                  : telemetryPill.tone === 'emerald'
+                  ? 'bg-emerald'
+                  : telemetryPill.tone === 'crimson'
+                  ? 'bg-crimson'
+                  : 'bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach'
+              }`}
+              aria-hidden="true"
+            />
+            <span>{telemetryPill.text}</span>
+          </div>
+
+          <Tooltip content="בחירת סשן וספריית היסטוריית יצירות" placement="bottom">
+            <button
+              type="button"
+              onClick={onToggleHistory}
+              aria-haspopup="dialog"
+              aria-expanded={isHistoryOpen}
+              aria-label={`היסטוריית סשנים (${sessionCount}) — ${decodedTitle}`}
+              className={`prism-interactive h-8 rounded-md border px-2 sm:px-2.5 text-xs inline-flex items-center gap-1.5 sm:gap-2 max-w-[160px] lg:max-w-[180px] xl:max-w-[230px] cursor-pointer ${
+                isHistoryOpen
+                  ? 'border-obsidian bg-surface text-obsidian shadow-xs'
+                  : 'border-hairline bg-surface hover:bg-porcelain text-ink'
+              }`}
+            >
+              <ClockCounterClockwise size={14} className="text-slate-ink shrink-0" />
+              <span className="hidden sm:inline truncate font-medium">{decodedTitle}</span>
+              <span className="font-mono text-[11px] tabular-nums bg-surface border border-hairline px-1.5 rounded-sm text-slate-ink shrink-0">
+                {sessionCount}
+              </span>
+              <CaretDown size={12} className="text-muted shrink-0" />
+            </button>
+          </Tooltip>
+        </div>
+
+        {/* Center (Desktop lg+): 4 Numbered Workflow Tabs Linked by Micro-Conduits */}
+        <nav
+          aria-label="ניווט חלונות עבודה"
+          className="hidden lg:flex items-stretch h-full overflow-x-auto no-scrollbar gap-1"
+        >
+          {NAV_TABS.map((tab, idx) => (
             <div key={tab.id} className="flex items-stretch shrink-0">
-              <button
-                type="button"
-                onClick={() => onSelectView(tab.id)}
-                className={`relative h-full px-2 sm:px-2.5 inline-flex items-center gap-1.5 text-sm whitespace-nowrap shrink-0 canon-transition cursor-pointer ${
-                  isActive
-                    ? 'text-obsidian font-semibold'
-                    : 'text-slate-ink hover:text-obsidian font-normal'
-                }`}
-              >
-                <span className="font-mono text-[11px] tabular-nums text-muted" dir="ltr">
-                  {tab.num}
-                </span>
-                <span className="font-mono text-[11px] text-muted" aria-hidden="true">
-                  /
-                </span>
-                <span>{tab.label}</span>
-
-                {tab.id === 'view-artifacts' && isPassed && (
-                  <Tooltip content="PASS — מאושר" placement="bottom">
-                    <span className="w-2 h-2 rounded-full bg-emerald shrink-0" />
-                  </Tooltip>
-                )}
-
-                {tab.id === 'view-artifacts' && !isPassed && notifyTone && (
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                      notifyTone === 'pass'
-                        ? 'bg-emerald'
-                        : notifyTone === 'escalate'
-                        ? 'bg-crimson'
-                        : 'bg-prism-violet'
-                    }`}
-                  />
-                )}
-
-                {tab.id === 'view-qa' && (
-                  <span className="font-mono text-[11px] tabular-nums text-slate-ink bg-recessed border border-hairline px-1.5 rounded-sm">
-                    {qaCount}
-                  </span>
-                )}
-
-                {tab.id === 'view-pipeline' && isStreaming && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-prism-violet animate-pulse shrink-0" />
-                )}
-
-                {isActive && (
-                  <motion.span
-                    layoutId="activeTabIndicator"
-                    transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
-                    className="absolute inset-x-1 bottom-0 h-[2px] bg-obsidian rounded-full"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="absolute inset-0 -top-1 rounded-full bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach blur-[8px] opacity-35"
-                    />
-                  </motion.span>
-                )}
-              </button>
-
+              {renderNavButton(tab, 'desktop')}
               {idx < NAV_TABS.length - 1 && (
                 <MicroConduitConnector state={conduitStates[idx]} />
               )}
             </div>
-          );
-        })}
-      </nav>
+          ))}
+        </nav>
 
-      {/* Left (RTL end): Obsidian +New Agent, MASTER/Sync, Betty */}
-      <div className="flex items-center gap-2 shrink-0">
-        <Tooltip content="פתח סשן חדש" placement="bottom">
-          <button
-            type="button"
-            onClick={onNewSession}
-            disabled={isStreaming}
-            className="btn-obsidian h-8 rounded-md px-3.5 text-xs lg:text-sm font-medium inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-          >
-            <Plus size={14} weight="bold" />
-            <span>סוכן חדש</span>
-          </button>
-        </Tooltip>
+        {/* Left (RTL end): Obsidian +New Agent, MASTER/Sync, Betty */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          <Tooltip content="פתח סשן חדש" placement="bottom">
+            <button
+              type="button"
+              onClick={onNewSession}
+              disabled={isStreaming}
+              aria-label="סוכן חדש"
+              className="btn-obsidian h-8 w-8 sm:w-auto sm:px-3.5 rounded-md text-xs lg:text-sm font-medium inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              <Plus size={14} weight="bold" />
+              <span className="hidden sm:inline">סוכן חדש</span>
+            </button>
+          </Tooltip>
 
-        <Tooltip content="סנכרון מרחב עבודה, מפתח Master וגיבוי JSON" placement="bottom">
-          <button
-            type="button"
-            onClick={onOpenSyncModal}
-            className="prism-interactive h-8 rounded-md border border-hairline bg-surface px-2.5 font-mono text-xs text-ink inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
-          >
-            {isMasterMode && (
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald shrink-0" aria-hidden="true" />
-            )}
-            <Key size={13} className="text-slate-ink shrink-0" />
-            <span>{isMasterMode ? 'MASTER' : 'סנכרון'}</span>
-          </button>
-        </Tooltip>
+          <Tooltip content="סנכרון מרחב עבודה, מפתח Master וגיבוי JSON" placement="bottom">
+            <button
+              type="button"
+              onClick={onOpenSyncModal}
+              aria-label={
+                isMasterMode
+                  ? 'מצב Master פעיל — פתח הגדרות סנכרון'
+                  : 'סנכרון מרחב עבודה ומפתח Master'
+              }
+              className="prism-interactive h-8 rounded-md border border-hairline bg-surface px-2 sm:px-2.5 font-mono text-[11px] sm:text-xs text-ink inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+            >
+              {isMasterMode && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald shrink-0" aria-hidden="true" />
+              )}
+              <Key size={13} className="text-slate-ink shrink-0" />
+              <span className="hidden min-[400px]:inline">
+                {isMasterMode ? 'MASTER' : 'סנכרון'}
+              </span>
+            </button>
+          </Tooltip>
 
-        <Tooltip content="פתח / סגור את בטי — יועצת AI ותמיכה טכנית" placement="bottom">
-          <button
-            type="button"
-            onClick={onToggleBetty}
-            aria-expanded={isBettyOpen}
-            className={`prism-interactive h-8 rounded-md border px-2.5 text-xs lg:text-sm inline-flex items-center gap-2 whitespace-nowrap cursor-pointer ${
-              isBettyOpen
-                ? 'border-obsidian bg-recessed text-obsidian font-medium prism-aura'
-                : 'border-hairline bg-surface text-ink'
-            }`}
-          >
-            <span
-              aria-hidden="true"
-              className="w-1.5 h-1.5 rounded-full bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach shrink-0"
-            />
-            <span>בטי • יועצת</span>
-          </button>
-        </Tooltip>
+          <Tooltip content="פתח / סגור את בטי — יועצת AI ותמיכה טכנית" placement="bottom">
+            <button
+              type="button"
+              onClick={onToggleBetty}
+              aria-expanded={isBettyOpen}
+              aria-label="פתח או סגור את בטי — יועצת AI"
+              className={`prism-interactive h-8 rounded-md border px-2 sm:px-2.5 text-xs lg:text-sm inline-flex items-center gap-1.5 sm:gap-2 whitespace-nowrap cursor-pointer ${
+                isBettyOpen
+                  ? 'border-obsidian bg-recessed text-obsidian font-medium prism-aura'
+                  : 'border-hairline bg-surface text-ink'
+              }`}
+            >
+              <span
+                aria-hidden="true"
+                className="w-1.5 h-1.5 rounded-full bg-gradient-to-tr from-prism-cyan via-prism-violet to-prism-peach shrink-0"
+              />
+              <span className="sm:hidden">בטי</span>
+              <span className="hidden sm:inline">בטי • יועצת</span>
+            </button>
+          </Tooltip>
+        </div>
       </div>
+
+      {/* Row 2 (Mobile & Tablet < lg): 4 Numbered Workflow Stage Tabs */}
+      <nav
+        aria-label="ניווט שלבי עבודה"
+        className="lg:hidden border-t border-[rgba(17,18,22,0.06)] bg-porcelain/75 h-[44px] overflow-x-auto no-scrollbar"
+      >
+        <div className="flex items-stretch justify-around sm:justify-center sm:gap-3 min-w-full w-max h-full px-1.5 sm:px-4">
+          {NAV_TABS.map((tab) => renderNavButton(tab, 'mobile'))}
+        </div>
+      </nav>
     </header>
   );
 }

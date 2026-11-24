@@ -80,6 +80,9 @@ export function BettyPanel({
   onSendMessage,
   onClearModeHistory,
 }: BettyPanelProps) {
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(min-width: 1024px)').matches : true,
+  );
   const [isDocked, setIsDocked] = useState(true);
   const [isMaximized, setIsMaximized] = useState(false);
   const [dockedWidth, setDockedWidth] = useState<number>(() => {
@@ -122,6 +125,15 @@ export function BettyPanel({
     if (!el) return;
     el.scrollTop = el.scrollHeight;
   }, [messages.length, isLoading, mode, isOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const syncBreakpoint = () => setIsDesktop(mq.matches);
+    syncBreakpoint();
+    mq.addEventListener('change', syncBreakpoint);
+    return () => mq.removeEventListener('change', syncBreakpoint);
+  }, []);
 
   useEffect(() => {
     const handleResize = () => {
@@ -217,13 +229,17 @@ export function BettyPanel({
     onClearModeHistory(mode);
   };
 
-  const containerClasses = isMaximized
+  const containerClasses = !isDesktop
+    ? 'fixed inset-y-0 left-0 z-50 w-full sm:max-w-[440px] h-[100dvh] bg-surface sm:border-r sm:border-hairline-strong shadow-xl shadow-obsidian/10 flex flex-col overflow-hidden'
+    : isMaximized
     ? 'fixed inset-4 z-40 bg-surface border border-hairline-strong rounded-lg shadow-xl shadow-obsidian/8 flex flex-col overflow-hidden'
     : isDocked
     ? 'w-full lg:w-[var(--betty-w)] bg-surface border-t lg:border-t-0 lg:border-r border-hairline flex flex-col shrink-0 relative h-[520px] lg:h-[calc(100vh-58px)] lg:sticky lg:top-[58px]'
     : 'fixed z-40 bg-surface border border-hairline-strong rounded-lg shadow-xl shadow-obsidian/8 flex flex-col overflow-hidden';
 
-  const containerStyle: React.CSSProperties = isMaximized
+  const containerStyle: React.CSSProperties | undefined = !isDesktop
+    ? undefined
+    : isMaximized
     ? {}
     : isDocked
     ? ({ '--betty-w': `${dockedWidth}px` } as React.CSSProperties)
@@ -235,110 +251,128 @@ export function BettyPanel({
       };
 
   return (
-    <aside
-      aria-label="חלון הצ'אט של בטי"
-      className={containerClasses}
-      style={containerStyle}
-    >
-      {/* Docked Edge Resize Handle (Inner right edge in RTL) */}
-      {isDocked && !isMaximized && (
-        <Tooltip
-          content="גרור לשינוי רוחב הפאנל"
-          placement="left"
-          className="hidden lg:block absolute top-0 bottom-0 -right-1 w-2 z-10"
-        >
-          <div
-            onPointerDown={(e) => {
-              if (e.button !== 0 || window.innerWidth < 1024) return;
-              e.preventDefault();
-              dragStateRef.current = {
-                kind: 'dock-resize',
-                startX: e.clientX,
-                startY: e.clientY,
-                startWidth: dockedWidth,
-                startRect: floatingRect,
-              };
-              document.body.style.userSelect = 'none';
-            }}
-            className="w-full h-full cursor-ew-resize hover:bg-obsidian/15"
-          />
-        </Tooltip>
+    <>
+      {!isDesktop && (
+        <div
+          className="fixed inset-0 z-40 bg-obsidian/25 backdrop-blur-[1px] lg:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
       )}
-
-      {/* Title Bar */}
-      <div
-        onPointerDown={(e) => {
-          if (isDocked || isMaximized || e.button !== 0) return;
-          if ((e.target as HTMLElement).closest('button')) return;
-          dragStateRef.current = {
-            kind: 'float-drag',
-            startX: e.clientX,
-            startY: e.clientY,
-            startWidth: dockedWidth,
-            startRect: floatingRect,
-          };
-          document.body.style.userSelect = 'none';
-        }}
-        className={`px-4 py-3 border-b border-hairline bg-porcelain flex items-center justify-between gap-2 ${
-          !isDocked && !isMaximized ? 'cursor-move' : ''
-        }`}
+      <aside
+        role={!isDesktop ? 'dialog' : undefined}
+        aria-modal={!isDesktop ? true : undefined}
+        aria-label="חלון הצ'אט של בטי"
+        className={containerClasses}
+        style={containerStyle}
       >
-        <div className="flex items-center gap-2.5 min-w-0">
-          <span className="p-1.5 rounded-md border border-hairline bg-surface text-obsidian prism-aura shrink-0">
-            <Robot size={15} />
-          </span>
-          <div className="min-w-0">
-            <div className="font-display text-sm font-semibold text-obsidian">בטי (Betty)</div>
-            <div className="text-[11px] text-slate-ink truncate">
-              {mode === 'tech_support'
-                ? 'תמיכה טכנית והדרכה על המערכת'
-                : 'יועצת הנדסת פרומפטים · Architect'}
+        {/* Docked Edge Resize Handle (Inner right edge in RTL) */}
+        {isDesktop && isDocked && !isMaximized && (
+          <Tooltip
+            content="גרור לשינוי רוחב הפאנל"
+            placement="left"
+            className="hidden lg:block absolute top-0 bottom-0 -right-1 w-2 z-10"
+          >
+            <div
+              onPointerDown={(e) => {
+                if (e.button !== 0 || window.innerWidth < 1024) return;
+                e.preventDefault();
+                dragStateRef.current = {
+                  kind: 'dock-resize',
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  startWidth: dockedWidth,
+                  startRect: floatingRect,
+                };
+                document.body.style.userSelect = 'none';
+              }}
+              className="w-full h-full cursor-ew-resize hover:bg-obsidian/15"
+            />
+          </Tooltip>
+        )}
+
+        {/* Title Bar */}
+        <div
+          onPointerDown={(e) => {
+            if (!isDesktop || isDocked || isMaximized || e.button !== 0) return;
+            if ((e.target as HTMLElement).closest('button')) return;
+            dragStateRef.current = {
+              kind: 'float-drag',
+              startX: e.clientX,
+              startY: e.clientY,
+              startWidth: dockedWidth,
+              startRect: floatingRect,
+            };
+            document.body.style.userSelect = 'none';
+          }}
+          className={`px-4 py-3 border-b border-hairline bg-porcelain flex items-center justify-between gap-2 ${
+            isDesktop && !isDocked && !isMaximized ? 'cursor-move' : ''
+          }`}
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="p-1.5 rounded-md border border-hairline bg-surface text-obsidian prism-aura shrink-0">
+              <Robot size={15} />
+            </span>
+            <div className="min-w-0">
+              <div className="font-display text-sm font-semibold text-obsidian">בטי (Betty)</div>
+              <div className="text-[11px] text-slate-ink truncate">
+                {mode === 'tech_support'
+                  ? 'תמיכה טכנית והדרכה על המערכת'
+                  : 'יועצת הנדסת פרומפטים · Architect'}
+              </div>
             </div>
           </div>
+
+          <div className="flex items-center gap-1 shrink-0">
+            <Tooltip
+              content={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'}
+              placement="bottom"
+              className="hidden lg:inline-flex"
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setIsMaximized(false);
+                  setIsDocked((prev) => !prev);
+                }}
+                aria-label={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'}
+                className={`p-1.5 rounded-sm border canon-transition cursor-pointer ${
+                  isDocked
+                    ? 'border-obsidian bg-recessed text-obsidian'
+                    : 'border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian'
+                }`}
+              >
+                <SidebarSimple size={14} />
+              </button>
+            </Tooltip>
+
+            <Tooltip
+              content={isMaximized ? 'שחזר גודל' : 'הגדל חלון'}
+              placement="bottom"
+              className="hidden lg:inline-flex"
+            >
+              <button
+                type="button"
+                onClick={() => setIsMaximized((prev) => !prev)}
+                aria-label={isMaximized ? 'שחזר גודל' : 'הגדל חלון'}
+                className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
+              >
+                {isMaximized ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
+              </button>
+            </Tooltip>
+
+            <Tooltip content="סגור חלון" placement="bottom">
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="סגור חלון בטי"
+                className="p-2 lg:p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
+              >
+                <X size={14} />
+              </button>
+            </Tooltip>
+          </div>
         </div>
-
-        <div className="flex items-center gap-1 shrink-0">
-          <Tooltip content={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'} placement="bottom">
-            <button
-              type="button"
-              onClick={() => {
-                setIsMaximized(false);
-                setIsDocked((prev) => !prev);
-              }}
-              aria-label={isDocked ? 'עבור לחלון צף' : 'עגן כסרגל צד'}
-              className={`p-1.5 rounded-sm border canon-transition cursor-pointer ${
-                isDocked
-                  ? 'border-obsidian bg-recessed text-obsidian'
-                  : 'border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian'
-              }`}
-            >
-              <SidebarSimple size={14} />
-            </button>
-          </Tooltip>
-
-          <Tooltip content={isMaximized ? 'שחזר גודל' : 'הגדל חלון'} placement="bottom">
-            <button
-              type="button"
-              onClick={() => setIsMaximized((prev) => !prev)}
-              aria-label={isMaximized ? 'שחזר גודל' : 'הגדל חלון'}
-              className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
-            >
-              {isMaximized ? <ArrowsIn size={14} /> : <ArrowsOut size={14} />}
-            </button>
-          </Tooltip>
-
-          <Tooltip content="סגור חלון" placement="bottom">
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label="סגור חלון בטי"
-              className="p-1.5 rounded-sm border border-hairline bg-surface hover:bg-hover text-slate-ink hover:text-obsidian canon-transition cursor-pointer"
-            >
-              <X size={14} />
-            </button>
-          </Tooltip>
-        </div>
-      </div>
 
       {/* Mode Switcher + Clear Button */}
       <div className="px-4 py-2.5 border-b border-hairline bg-surface flex items-center justify-between gap-2">
@@ -407,7 +441,7 @@ export function BettyPanel({
       </div>
 
       {/* Wrapping Quick Suggestions — ZERO horizontal scrollbar */}
-      <div className="px-4 py-2.5 border-b border-hairline bg-porcelain/60 flex flex-wrap gap-1.5 overflow-x-visible">
+      <div className="px-3 py-2 lg:px-4 lg:py-2.5 border-b border-hairline bg-porcelain/60 flex flex-wrap gap-1.5 max-h-[112px] lg:max-h-none overflow-y-auto lg:overflow-visible">
         {BETTY_SUGGESTIONS[mode].map((q) => (
           <button
             key={q}
@@ -489,7 +523,7 @@ export function BettyPanel({
       {/* Composer */}
       <form
         onSubmit={handleSubmit}
-        className="px-4 py-3 border-t border-hairline bg-porcelain"
+        className="px-3 sm:px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:py-3 border-t border-hairline bg-porcelain"
       >
         <div className="prism-composer flex items-end gap-2 rounded-xl border border-hairline bg-white px-3 py-2">
           <textarea
@@ -508,7 +542,7 @@ export function BettyPanel({
                 ? 'שאל את בטי איך המערכת עובדת או איך לתפעל...'
                 : 'התייעץ עם בטי על ארכיטקטורת הפרומפט והמודולים...'
             }
-            className="flex-1 resize-none bg-transparent text-xs text-ink placeholder:text-muted focus:outline-none min-h-[44px] max-h-[140px]"
+            className="flex-1 resize-none bg-transparent text-sm lg:text-xs text-ink placeholder:text-muted focus:outline-none min-h-[44px] max-h-[140px]"
           />
           <button
             type="submit"
@@ -522,7 +556,7 @@ export function BettyPanel({
       </form>
 
       {/* Bottom-right floating resize handle */}
-      {!isDocked && !isMaximized && (
+      {isDesktop && !isDocked && !isMaximized && (
         <Tooltip
           content="שנה גודל חלון"
           placement="top"
@@ -545,6 +579,7 @@ export function BettyPanel({
           />
         </Tooltip>
       )}
-    </aside>
+      </aside>
+    </>
   );
 }

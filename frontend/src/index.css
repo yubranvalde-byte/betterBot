@@ -213,6 +213,14 @@
       0 2px 6px rgba(17, 18, 22, 0.03),
       0 12px 32px -16px rgba(17, 18, 22, 0.08);
   }
+
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
 @keyframes optical-flow {
