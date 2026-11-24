@@ -1,21 +1,26 @@
 import asyncio
+import copy
 import hmac
 import io
 import json
+import logging
 import os
 import re
+import threading
+import time
 import uuid
 import zipfile
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import main
 import storage
@@ -34,18 +39,33 @@ from main import (
 )
 from prompts import BETTY_PROMPT_ADVISOR_PROMPT, BETTY_TECH_SUPPORT_PROMPT
 
+logger = logging.getLogger("betterbot.server")
+
 app = FastAPI(
     title="BetterBot — The Intelligence Factory API",
     description="Web Backend & Real-time Multi-Agent Orchestrator for BetterBot 2.0",
     version="2.0.0",
 )
 
+_DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+_raw_origins = (os.environ.get("ALLOWED_ORIGINS") or "").strip()
+ALLOWED_ORIGINS = (
+    [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    if _raw_origins
+    else _DEFAULT_ALLOWED_ORIGINS
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "X-Workspace-ID", "X-Master-Key"],
     expose_headers=["Content-Disposition"],
 )
 
@@ -72,7 +92,107 @@ MASTER_OWNER_ID = "master"
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 )
-SESSIONS: Dict[Tuple[str, str], Dict[str, Any]] = {}
+MAX_CACHED_SESSIONS = int(os.environ.get("MAX_CACHED_SESSIONS", "256") or 256)
+MAX_BETTY_WORKSPACES = int(os.environ.get("MAX_BETTY_WORKSPACES", "256") or 256)
+MAX_BETTY_MESSAGES = 80
+MAX_IMPORT_BYTES = 10 * 1024 * 1024
+MAX_IMPORT_SESSIONS = 200
+
+SESSIONS: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
+_CACHE_LOCK = threading.Lock()
+_SESSION_LOCKS: Dict[Tuple[str, str], asyncio.Lock] = {}
+_ACTIVE_STREAM_KEYS: Set[Tuple[str, str]] = set()
+
+
+class _RateLimiter:
+    """Thread-safe bounded sliding-window rate limiter using stdlib only."""
+
+    def __init__(self, max_keys: int = 2048) -> None:
+        self._max_keys = max_keys
+        self._buckets: "OrderedDict[Tuple[str, str], List[float]]" = OrderedDict()
+        self._lock = threading.Lock()
+
+    def check(
+        self, bucket: str, key: str, limit: int, window_seconds: float
+    ) -> Tuple[bool, int]:
+        now = time.monotonic()
+        cutoff = now - window_seconds
+        full_key = (bucket, key)
+        with self._lock:
+            timestamps = self._buckets.get(full_key)
+            if timestamps is None:
+                timestamps = []
+                self._buckets[full_key] = timestamps
+            else:
+                self._buckets.move_to_end(full_key)
+                timestamps[:] = [t for t in timestamps if t > cutoff]
+
+            if len(timestamps) >= limit:
+                retry_after = max(1, int(window_seconds - (now - timestamps[0])) + 1)
+                return False, retry_after
+
+            timestamps.append(now)
+            while len(self._buckets) > self._max_keys:
+                self._buckets.popitem(last=False)
+            return True, 0
+
+
+_RATE_LIMITER = _RateLimiter()
+
+
+def _get_client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded:
+        first_ip = forwarded.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    return request.client.host if request.client and request.client.host else "unknown"
+
+
+def _enforce_rate_limit(
+    request: Request,
+    bucket: str,
+    limit: int,
+    window_seconds: float,
+    identity: Optional[str] = None,
+) -> None:
+    ip = _get_client_ip(request)
+    rate_key = f"{ip}:{identity}" if identity else ip
+    allowed, retry_after = _RATE_LIMITER.check(bucket, rate_key, limit, window_seconds)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded; retry in {retry_after}s",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _cache_put_session(cache_key: Tuple[str, str], session: Dict[str, Any]) -> None:
+    with _CACHE_LOCK:
+        SESSIONS[cache_key] = session
+        SESSIONS.move_to_end(cache_key)
+        while len(SESSIONS) > MAX_CACHED_SESSIONS:
+            evict_key = next((k for k in SESSIONS if k not in _ACTIVE_STREAM_KEYS), None)
+            if evict_key is None:
+                break
+            SESSIONS.pop(evict_key, None)
+
+
+def _get_session_lock(cache_key: Tuple[str, str]) -> asyncio.Lock:
+    with _CACHE_LOCK:
+        lock = _SESSION_LOCKS.get(cache_key)
+        if lock is None:
+            if len(_SESSION_LOCKS) > MAX_CACHED_SESSIONS * 2:
+                stale = [
+                    k
+                    for k, lk in _SESSION_LOCKS.items()
+                    if not lk.locked() and k not in _ACTIVE_STREAM_KEYS and k not in SESSIONS
+                ]
+                for k in stale[:MAX_CACHED_SESSIONS]:
+                    _SESSION_LOCKS.pop(k, None)
+            lock = asyncio.Lock()
+            _SESSION_LOCKS[cache_key] = lock
+        return lock
 
 
 def _get_master_workspace_key() -> str:
@@ -131,37 +251,53 @@ init_storage_and_hydrate()
 
 
 def save_session_record(owner_id: str, session_id: Optional[str] = None) -> None:
-    if session_id and (owner_id, session_id) in SESSIONS:
-        storage.save_session(session_id, SESSIONS[(owner_id, session_id)], owner_id)
-    elif session_id is None:
-        for (oid, sid), sess in list(SESSIONS.items()):
-            if oid == owner_id:
-                storage.save_session(sid, sess, oid)
+    snapshots: List[Tuple[str, Dict[str, Any]]] = []
+    with _CACHE_LOCK:
+        if session_id:
+            cached = SESSIONS.get((owner_id, session_id))
+            if cached is not None:
+                snapshots.append((session_id, copy.deepcopy(cached)))
+        else:
+            for (oid, sid), sess in list(SESSIONS.items()):
+                if oid == owner_id:
+                    snapshots.append((sid, copy.deepcopy(sess)))
+
+    for sid, snapshot in snapshots:
+        storage.save_session(sid, snapshot, owner_id)
+        with _CACHE_LOCK:
+            live = SESSIONS.get((owner_id, sid))
+            if live is not None:
+                if snapshot.get("created_at_iso"):
+                    live["created_at_iso"] = snapshot["created_at_iso"]
+                if snapshot.get("updated_at_iso"):
+                    live["updated_at_iso"] = snapshot["updated_at_iso"]
 
 
 def get_or_load_session(session_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
     cache_key = (owner_id, session_id)
-    if cache_key in SESSIONS:
-        return SESSIONS[cache_key]
+    with _CACHE_LOCK:
+        if cache_key in SESSIONS:
+            SESSIONS.move_to_end(cache_key)
+            return SESSIONS[cache_key]
     loaded = storage.load_session(session_id, owner_id)
     if loaded:
-        SESSIONS[cache_key] = loaded
+        _cache_put_session(cache_key, loaded)
         return loaded
     return None
 
 
 class UserMessageRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=20000)
     mode: Optional[str] = "auto"  # "auto", "interview", "override"
     model_overrides: Optional[Dict[str, str]] = None
 
 
 class RenameSessionRequest(BaseModel):
-    title: str
+    title: str = Field(..., min_length=1, max_length=120)
 
 
 class MasterKeyVerifyRequest(BaseModel):
-    key: str = ""
+    key: str = Field(default="", max_length=256)
 
 
 def extract_helper_parts(raw_text: str) -> Dict[str, str]:
@@ -343,7 +479,7 @@ def create_new_session(
             }
         ],
     }
-    SESSIONS[(owner_id, session_id)] = session
+    _cache_put_session((owner_id, session_id), session)
     save_session_record(owner_id, session_id)
     return session
 
@@ -471,11 +607,14 @@ async def serve_index():
     index_file = STATIC_DIR / "index.html"
     if not index_file.exists():
         return HTMLResponse("<h1>BetterBot UI is loading...</h1>")
-    return HTMLResponse(index_file.read_text(encoding="utf-8"))
+    html_content = await asyncio.to_thread(index_file.read_text, encoding="utf-8")
+    return HTMLResponse(html_content)
 
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def health_check():
+    with _CACHE_LOCK:
+        active_count = len(SESSIONS)
     return {
         "status": "ok",
         "model": main.FAST_MODEL,
@@ -484,12 +623,13 @@ async def health_check():
         "fallback_model": main.FALLBACK_MODEL,
         "decision_model": main.DECISION_MODEL,
         "routing": main.get_model_routing_summary(),
-        "active_sessions": len(SESSIONS),
+        "active_sessions": active_count,
     }
 
 
 @app.post("/api/workspace/verify-master")
 async def verify_master_key(request: Request, req: MasterKeyVerifyRequest):
+    _enforce_rate_limit(request, "verify-master", 10, 60.0)
     candidate = (req.key or request.headers.get("X-Master-Key") or "").strip()
     authorized, configured = _verify_master_key_value(candidate)
     return {"authorized": authorized, "configured": configured}
@@ -497,7 +637,7 @@ async def verify_master_key(request: Request, req: MasterKeyVerifyRequest):
 
 @app.get("/api/workspace/export")
 async def export_workspace_history(owner_id: str = Depends(resolve_owner_id)):
-    sessions_list = storage.export_workspace_sessions(owner_id)
+    sessions_list = await asyncio.to_thread(storage.export_workspace_sessions, owner_id)
     payload = {
         "schema_version": 1,
         "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -520,32 +660,53 @@ async def export_workspace_history(owner_id: str = Depends(resolve_owner_id)):
 async def import_workspace_history(
     request: Request, owner_id: str = Depends(resolve_owner_id)
 ):
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_IMPORT_BYTES:
+                raise HTTPException(status_code=413, detail="Import payload too large")
+        except ValueError:
+            pass
+
+    raw_body = await request.body()
+    if len(raw_body) > MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Import payload too large")
+
     try:
-        payload = await request.json()
+        payload = json.loads(raw_body.decode("utf-8"))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
+    raw_list = payload.get("sessions") if isinstance(payload, dict) else payload
+    if isinstance(raw_list, list) and len(raw_list) > MAX_IMPORT_SESSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Import exceeds maximum of {MAX_IMPORT_SESSIONS} sessions",
+        )
+
     try:
-        summary = storage.import_workspace_sessions(owner_id, payload)
+        summary = await asyncio.to_thread(storage.import_workspace_sessions, owner_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
 
-    for key in [k for k in SESSIONS if k[0] == owner_id]:
-        SESSIONS.pop(key, None)
+    with _CACHE_LOCK:
+        for key in [k for k in SESSIONS if k[0] == owner_id]:
+            SESSIONS.pop(key, None)
 
     return summary
 
 
 @app.get("/api/sessions")
 async def list_sessions(owner_id: str = Depends(resolve_owner_id)):
-    return {"sessions": storage.list_sessions(owner_id)}
+    sessions = await asyncio.to_thread(storage.list_sessions, owner_id)
+    return {"sessions": sessions}
 
 
 @app.post("/api/sessions")
 async def create_session_endpoint(owner_id: str = Depends(resolve_owner_id)):
-    session = create_new_session(owner_id=owner_id)
+    session = await asyncio.to_thread(create_new_session, owner_id=owner_id)
     return enrich_session(session)
 
 
@@ -553,7 +714,7 @@ async def create_session_endpoint(owner_id: str = Depends(resolve_owner_id)):
 async def get_session_endpoint(
     session_id: str, owner_id: str = Depends(resolve_owner_id)
 ):
-    session = get_or_load_session(session_id, owner_id)
+    session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return enrich_session(session)
@@ -568,10 +729,10 @@ async def rename_session_endpoint(
     clean_title = req.title.strip()
     if not clean_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
-    session = get_or_load_session(session_id, owner_id)
+    session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    updated = storage.rename_session(session_id, clean_title, owner_id)
+    updated = await asyncio.to_thread(storage.rename_session, session_id, clean_title, owner_id)
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found")
     session["title"] = clean_title
@@ -586,8 +747,9 @@ async def rename_session_endpoint(
 async def delete_session_endpoint(
     session_id: str, owner_id: str = Depends(resolve_owner_id)
 ):
-    SESSIONS.pop((owner_id, session_id), None)
-    deleted = storage.delete_session(session_id, owner_id)
+    with _CACHE_LOCK:
+        SESSIONS.pop((owner_id, session_id), None)
+    deleted = await asyncio.to_thread(storage.delete_session, session_id, owner_id)
     return {"deleted": bool(deleted)}
 
 
@@ -679,7 +841,7 @@ def build_install_guide_md(
 async def download_session_bundle(
     session_id: str, owner_id: str = Depends(resolve_owner_id)
 ):
-    session = get_or_load_session(session_id, owner_id)
+    session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
@@ -800,416 +962,474 @@ def _attach_timeline_telemetry(
     return entry
 
 
+def _resolve_non_compiling_status(
+    session: Dict[str, Any], state: Dict[str, Any]
+) -> str:
+    last_log = state["error_log"][-1] if state.get("error_log") else ""
+    if "[PASS]" in last_log:
+        return "passed"
+    if "[ESCALATE]" in last_log:
+        return "escalated"
+    if state.get("user_input") or state.get("challenger_xml"):
+        return "interviewing"
+    return "idle"
+
+
 @app.post("/api/sessions/{session_id}/stream")
 async def stream_factory_execution(
     session_id: str,
     req: UserMessageRequest,
+    request: Request,
     owner_id: str = Depends(resolve_owner_id),
 ):
     """
     Executes the LangGraph workflow step-by-step and streams real-time SSE updates
     so the UI can animate each node (Helper -> Construct -> Adjudicator <-> Upgrader).
     """
-    session = get_or_load_session(session_id, owner_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    _enforce_rate_limit(request, "stream", 20, 60.0, identity=owner_id)
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
 
-    now = datetime.now().strftime("%H:%M:%S")
-    session["updated_at"] = now
-
-    # Update session title from first user input
-    if session["title"] == "סשן חדש":
-        session["title"] = user_msg[:36] + ("..." if len(user_msg) > 36 else "")
-
-    state: FactoryState = session["state"]
-    if req.model_overrides is not None:
-        sanitized_overrides = main.sanitize_model_overrides(req.model_overrides)
-        if sanitized_overrides:
-            state["model_overrides"] = sanitized_overrides
-        elif req.model_overrides == {}:
-            state.pop("model_overrides", None)
-
-    # Determine whether this is an interview turn or a manual override directive
-    is_override = (
-        req.mode == "override"
-        or session["status"] in ["escalated", "passed"]
-        or (state.get("iteration_count", 0) > 0)
-    )
-
-    if is_override:
-        session["chat_history"].append(
-            {
-                "id": str(uuid.uuid4())[:8],
-                "role": "user",
-                "is_override": True,
-                "text": user_msg,
-                "timestamp": now,
-            }
+    cache_key = (owner_id, session_id)
+    session_lock = _get_session_lock(cache_key)
+    if session_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Session already has an active execution stream",
         )
-        state["error_log"] = list(state.get("error_log", [])) + [
-            f"[MANUAL OVERRIDE] {user_msg}"
-        ]
-        state["iteration_count"] = 1
-        state["linter_retries"] = 0
-        session["timeline"].append(
-            {
-                "id": str(uuid.uuid4())[:8],
-                "timestamp": now,
-                "node": "override",
-                "title": "פקודת עריכה ידנית (Manual Override)",
-                "detail": user_msg,
-                "status": "warning",
-            }
+
+    await session_lock.acquire()
+    _ACTIVE_STREAM_KEYS.add(cache_key)
+    streaming_started = False
+
+    try:
+        session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        now = datetime.now().strftime("%H:%M:%S")
+        session["updated_at"] = now
+
+        # Update session title from first user input
+        if session["title"] == "סשן חדש":
+            session["title"] = user_msg[:36] + ("..." if len(user_msg) > 36 else "")
+
+        state: FactoryState = session["state"]
+        if req.model_overrides is not None:
+            sanitized_overrides = main.sanitize_model_overrides(req.model_overrides)
+            if sanitized_overrides:
+                state["model_overrides"] = sanitized_overrides
+            elif req.model_overrides == {}:
+                state.pop("model_overrides", None)
+
+        # Determine whether this is an interview turn or a manual override directive
+        is_override = (
+            req.mode == "override"
+            or session["status"] in ["escalated", "passed"]
+            or (state.get("iteration_count", 0) > 0)
         )
-    else:
-        session["chat_history"].append(
-            {
-                "id": str(uuid.uuid4())[:8],
-                "role": "user",
-                "is_override": False,
-                "text": user_msg,
-                "timestamp": now,
-            }
-        )
-        if not state.get("user_input"):
-            state["user_input"] = user_msg
-        else:
-            last_helper = state.get("challenger_xml", "")
-            clean_helper = extract_helper_parts(last_helper)["chat_text"]
-            state["user_input"] += f"\nAssistant: {clean_helper}\nUser: {user_msg}"
 
-    save_session_record(owner_id, session_id)
-
-    async def event_generator():
-        def sse(event_type: str, payload: Dict[str, Any]) -> str:
-            return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-
-        try:
-            # Determine starting node using route_from_start
-            current_node = route_from_start(state)
-            yield sse("session_update", enrich_session(session))
-            await asyncio.sleep(0)
-
-            while current_node != main.END:
-                step_time = datetime.now().strftime("%H:%M:%S")
-                session["active_node"] = current_node
-
-                node_labels = {
-                    "node_1_helper": ("Node 1: The Helper", "מנתח דרישות ומנסח שאלות / Blueprint..."),
-                    "node_2_construct": ("Node 2: The Construct", "מהדר את ה-Blueprint לתוצר סופי..."),
-                    "gate_1_5_linter": ("Gate 1.5: Structural Linter", "מאמת מבנה YAML, הפניות וקובצי חבילה (0 טוקנים)..."),
-                    "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-Blueprint והתוצר..."),
-                    "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
+        if is_override:
+            session["chat_history"].append(
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "role": "user",
+                    "is_override": True,
+                    "text": user_msg,
+                    "timestamp": now,
                 }
-                label_title, label_desc = node_labels.get(current_node, (current_node, "מבצע פעולה..."))
-                routing_plan = main.get_node_routing_plan(current_node, state)
+            )
+            state["error_log"] = list(state.get("error_log", [])) + [
+                f"[MANUAL OVERRIDE] {user_msg}"
+            ]
+            state["iteration_count"] = 1
+            state["linter_retries"] = 0
+            session["timeline"].append(
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "timestamp": now,
+                    "node": "override",
+                    "title": "פקודת עריכה ידנית (Manual Override)",
+                    "detail": user_msg,
+                    "status": "warning",
+                }
+            )
+        else:
+            session["chat_history"].append(
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "role": "user",
+                    "is_override": False,
+                    "text": user_msg,
+                    "timestamp": now,
+                }
+            )
+            if not state.get("user_input"):
+                state["user_input"] = user_msg
+            else:
+                last_helper = state.get("challenger_xml", "")
+                clean_helper = extract_helper_parts(last_helper)["chat_text"]
+                state["user_input"] += f"\nAssistant: {clean_helper}\nUser: {user_msg}"
 
-                yield sse(
-                    "node_start",
-                    {
-                        "node": current_node,
-                        "title": label_title,
-                        "description": label_desc,
-                        "iteration": state.get("iteration_count", 0),
-                        "model": routing_plan["model"],
-                        "thinking_level": routing_plan["thinking_level"],
-                    },
-                )
+        await asyncio.to_thread(save_session_record, owner_id, session_id)
+
+        async def event_generator():
+            def sse(event_type: str, payload: Dict[str, Any]) -> str:
+                return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            try:
+                # Determine starting node using route_from_start
+                current_node = route_from_start(state)
+                yield sse("session_update", enrich_session(session))
                 await asyncio.sleep(0)
 
-                node_tel: Dict[str, Any] = {}
+                while current_node != main.END:
+                    step_time = datetime.now().strftime("%H:%M:%S")
+                    session["active_node"] = current_node
 
-                # Execute the node in a worker thread so event loop stays responsive
-                if current_node == "node_1_helper":
-                    session["status"] = "interviewing"
-                    update = await asyncio.to_thread(node_helper, state)
-                    _apply_node_update(state, update)
-                    node_tel = (update.get("model_telemetry") or {}).get("node_1_helper") or {}
+                    node_labels = {
+                        "node_1_helper": ("Node 1: The Helper", "מנתח דרישות ומנסח שאלות / Blueprint..."),
+                        "node_2_construct": ("Node 2: The Construct", "מהדר את ה-Blueprint לתוצר סופי..."),
+                        "gate_1_5_linter": ("Gate 1.5: Structural Linter", "מאמת מבנה YAML, הפניות וקובצי חבילה (0 טוקנים)..."),
+                        "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-Blueprint והתוצר..."),
+                        "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
+                    }
+                    label_title, label_desc = node_labels.get(current_node, (current_node, "מבצע פעולה..."))
+                    routing_plan = main.get_node_routing_plan(current_node, state)
 
-                    parts = extract_helper_parts(state.get("challenger_xml", ""))
-                    has_blueprint = has_blueprint_xml(state.get("challenger_xml", ""))
+                    yield sse(
+                        "node_start",
+                        {
+                            "node": current_node,
+                            "title": label_title,
+                            "description": label_desc,
+                            "iteration": state.get("iteration_count", 0),
+                            "model": routing_plan["model"],
+                            "thinking_level": routing_plan["thinking_level"],
+                        },
+                    )
+                    await asyncio.sleep(0)
 
-                    if has_blueprint:
-                        session["chat_history"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "role": "assistant",
-                                "agent": "The Helper (Requirements Architect)",
-                                "text": parts["chat_text"]
-                                or "תוכנית האב (`<ARTIFACT_BLUEPRINT>`) מוכנה! מעביר כעת למהדר (The Construct)...",
-                                "thought": parts["thought"],
-                                "has_blueprint": True,
-                                "timestamp": step_time,
-                            }
-                        )
+                    node_tel: Dict[str, Any] = {}
+
+                    # Execute the node in a worker thread on an isolated state snapshot
+                    if current_node == "node_1_helper":
+                        session["status"] = "interviewing"
+                        update = await asyncio.to_thread(node_helper, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("node_1_helper") or {}
+
+                        parts = extract_helper_parts(state.get("challenger_xml", ""))
+                        has_blueprint = has_blueprint_xml(state.get("challenger_xml", ""))
+
+                        if has_blueprint:
+                            session["chat_history"].append(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "role": "assistant",
+                                    "agent": "The Helper (Requirements Architect)",
+                                    "text": parts["chat_text"]
+                                    or "תוכנית האב (`<ARTIFACT_BLUEPRINT>`) מוכנה! מעביר כעת למהדר (The Construct)...",
+                                    "thought": parts["thought"],
+                                    "has_blueprint": True,
+                                    "timestamp": step_time,
+                                }
+                            )
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
+                                    {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": step_time,
+                                        "node": "node_1_helper",
+                                        "title": "הופק XML Blueprint",
+                                        "detail": "הראיון הושלם ותורגם לארכיטקטורה קוגניטיבית.",
+                                        "status": "success",
+                                    },
+                                    node_tel,
+                                )
+                            )
+                        else:
+                            session["chat_history"].append(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "role": "assistant",
+                                    "agent": "The Helper (Requirements Architect)",
+                                    "text": parts["chat_text"],
+                                    "thought": parts["thought"],
+                                    "has_blueprint": False,
+                                    "timestamp": step_time,
+                                }
+                            )
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
+                                    {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": step_time,
+                                        "node": "node_1_helper",
+                                        "title": "שאלת מיקוד בראיון",
+                                        "detail": parts["chat_text"][:120] + ("..." if len(parts["chat_text"]) > 120 else ""),
+                                        "status": "info",
+                                    },
+                                    node_tel,
+                                )
+                            )
+
+                        next_node = route_from_helper(state)
+
+                    elif current_node == "node_2_construct":
+                        session["status"] = "compiling"
+                        update = await asyncio.to_thread(node_construct, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("node_2_construct") or {}
+
                         session["timeline"].append(
                             _attach_timeline_telemetry(
                                 {
                                     "id": str(uuid.uuid4())[:8],
                                     "timestamp": step_time,
-                                    "node": "node_1_helper",
-                                    "title": "הופק XML Blueprint",
-                                    "detail": "הראיון הושלם ותורגם לארכיטקטורה קוגניטיבית.",
+                                    "node": "node_2_construct",
+                                    "title": "הידור הפרומפט הושלם (The Construct)",
+                                    "detail": f"נוצר Challenger Prompt באורך {len(state.get('challenger_prompt', ''))} תווים.",
                                     "status": "success",
                                 },
                                 node_tel,
                             )
                         )
-                    else:
-                        session["chat_history"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "role": "assistant",
-                                "agent": "The Helper (Requirements Architect)",
-                                "text": parts["chat_text"],
-                                "thought": parts["thought"],
-                                "has_blueprint": False,
-                                "timestamp": step_time,
-                            }
-                        )
+                        next_node = "gate_1_5_linter"
+
+                    elif current_node == "node_3_upgrader":
+                        session["status"] = "compiling"
+                        update = await asyncio.to_thread(node_upgrader, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("node_3_upgrader") or {}
+
                         session["timeline"].append(
                             _attach_timeline_telemetry(
                                 {
                                     "id": str(uuid.uuid4())[:8],
                                     "timestamp": step_time,
-                                    "node": "node_1_helper",
-                                    "title": "שאלת מיקוד בראיון",
-                                    "detail": parts["chat_text"][:120] + ("..." if len(parts["chat_text"]) > 120 else ""),
+                                    "node": "node_3_upgrader",
+                                    "title": f"שדרוג גרסה הושלם (איטרציה {state.get('iteration_count', 1)})",
+                                    "detail": "עודכנו ה-XML וה-System Prompt בהתאם להנחיות התיקון.",
                                     "status": "info",
                                 },
                                 node_tel,
                             )
                         )
+                        next_node = "gate_1_5_linter"
 
-                    next_node = route_from_helper(state)
+                    elif current_node == "gate_1_5_linter":
+                        session["status"] = "compiling"
+                        update = await asyncio.to_thread(node_gate_1_5_linter, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("gate_1_5_linter") or {}
+                        lint_res = state.get("linter_result") or {}
+                        next_node = route_from_linter(state)
 
-                elif current_node == "node_2_construct":
-                    session["status"] = "compiling"
-                    update = await asyncio.to_thread(node_construct, state)
-                    _apply_node_update(state, update)
-                    node_tel = (update.get("model_telemetry") or {}).get("node_2_construct") or {}
+                        if lint_res.get("passed"):
+                            lint_title = "Gate 1.5 Linter: PASS"
+                            lint_detail = "בדיקת מבנה דטרמיניסטית עברה בהצלחה (0 טוקנים). ממשיך ל-Gate 2."
+                            lint_status = "success"
+                        elif lint_res.get("will_retry"):
+                            lint_title = "Gate 1.5 Linter: FAIL -> Upgrader"
+                            lint_detail = lint_res.get("correction_directive") or "אותרו כשלים מבניים; מעביר לתיקון אטומי."
+                            lint_status = "warning"
+                        else:
+                            lint_title = "Gate 1.5 Linter: Cap Reached -> Gate 2"
+                            lint_detail = "תקרת ניסיונות הלינטר מוצתה; ממשיך ל-Adjudicator."
+                            lint_status = "warning"
 
-                    session["timeline"].append(
-                        _attach_timeline_telemetry(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_2_construct",
-                                "title": "הידור הפרומפט הושלם (The Construct)",
-                                "detail": f"נוצר Challenger Prompt באורך {len(state.get('challenger_prompt', ''))} תווים.",
-                                "status": "success",
-                            },
-                            node_tel,
-                        )
-                    )
-                    next_node = "gate_1_5_linter"
-
-                elif current_node == "node_3_upgrader":
-                    session["status"] = "compiling"
-                    update = await asyncio.to_thread(node_upgrader, state)
-                    _apply_node_update(state, update)
-                    node_tel = (update.get("model_telemetry") or {}).get("node_3_upgrader") or {}
-
-                    session["timeline"].append(
-                        _attach_timeline_telemetry(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "node_3_upgrader",
-                                "title": f"שדרוג גרסה הושלם (איטרציה {state.get('iteration_count', 1)})",
-                                "detail": "עודכנו ה-XML וה-System Prompt בהתאם להנחיות התיקון.",
-                                "status": "info",
-                            },
-                            node_tel,
-                        )
-                    )
-                    next_node = "gate_1_5_linter"
-
-                elif current_node == "gate_1_5_linter":
-                    session["status"] = "compiling"
-                    update = await asyncio.to_thread(node_gate_1_5_linter, state)
-                    _apply_node_update(state, update)
-                    node_tel = (update.get("model_telemetry") or {}).get("gate_1_5_linter") or {}
-                    lint_res = state.get("linter_result") or {}
-                    next_node = route_from_linter(state)
-
-                    if lint_res.get("passed"):
-                        lint_title = "Gate 1.5 Linter: PASS"
-                        lint_detail = "בדיקת מבנה דטרמיניסטית עברה בהצלחה (0 טוקנים). ממשיך ל-Gate 2."
-                        lint_status = "success"
-                    elif lint_res.get("will_retry"):
-                        lint_title = "Gate 1.5 Linter: FAIL -> Upgrader"
-                        lint_detail = lint_res.get("correction_directive") or "אותרו כשלים מבניים; מעביר לתיקון אטומי."
-                        lint_status = "warning"
-                    else:
-                        lint_title = "Gate 1.5 Linter: Cap Reached -> Gate 2"
-                        lint_detail = "תקרת ניסיונות הלינטר מוצתה; ממשיך ל-Adjudicator."
-                        lint_status = "warning"
-
-                    session["timeline"].append(
-                        _attach_timeline_telemetry(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "gate_1_5_linter",
-                                "title": lint_title,
-                                "detail": lint_detail,
-                                "status": lint_status,
-                            },
-                            node_tel,
-                        )
-                    )
-
-                elif current_node == "node_4_adjudicator":
-                    session["status"] = "compiling"
-                    prev_iter = state.get("iteration_count", 0)
-                    update = await asyncio.to_thread(node_adjudicator, state)
-                    _apply_node_update(state, update)
-                    node_tel = (update.get("model_telemetry") or {}).get("node_4_adjudicator") or {}
-
-                    last_log = state["error_log"][-1] if state.get("error_log") else ""
-                    qa_mode = "Baseline QA" if prev_iter == 0 else f"Regression QA (#{prev_iter})"
-
-                    if "[PASS]" in last_log:
                         session["timeline"].append(
                             _attach_timeline_telemetry(
                                 {
                                     "id": str(uuid.uuid4())[:8],
                                     "timestamp": step_time,
-                                    "node": "node_4_adjudicator",
-                                    "title": f"{qa_mode}: PASS ✅",
-                                    "detail": "הפרומפט עמד בכל בדיקות האיכות ואושר לשימוש!",
-                                    "status": "success",
+                                    "node": "gate_1_5_linter",
+                                    "title": lint_title,
+                                    "detail": lint_detail,
+                                    "status": lint_status,
                                 },
                                 node_tel,
                             )
                         )
-                    elif "[FAIL]" in last_log:
-                        session["timeline"].append(
-                            _attach_timeline_telemetry(
-                                {
-                                    "id": str(uuid.uuid4())[:8],
-                                    "timestamp": step_time,
-                                    "node": "node_4_adjudicator",
-                                    "title": f"{qa_mode}: FAIL 🔄",
-                                    "detail": last_log,
-                                    "status": "warning",
-                                },
-                                node_tel,
+
+                    elif current_node == "node_4_adjudicator":
+                        session["status"] = "compiling"
+                        prev_iter = state.get("iteration_count", 0)
+                        update = await asyncio.to_thread(node_adjudicator, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("node_4_adjudicator") or {}
+
+                        last_log = state["error_log"][-1] if state.get("error_log") else ""
+                        qa_mode = "Baseline QA" if prev_iter == 0 else f"Regression QA (#{prev_iter})"
+
+                        if "[PASS]" in last_log:
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
+                                    {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": step_time,
+                                        "node": "node_4_adjudicator",
+                                        "title": f"{qa_mode}: PASS ✅",
+                                        "detail": "הפרומפט עמד בכל בדיקות האיכות ואושר לשימוש!",
+                                        "status": "success",
+                                    },
+                                    node_tel,
+                                )
                             )
-                        )
-                    else:
-                        session["timeline"].append(
-                            _attach_timeline_telemetry(
+                        elif "[FAIL]" in last_log:
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
+                                    {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": step_time,
+                                        "node": "node_4_adjudicator",
+                                        "title": f"{qa_mode}: FAIL 🔄",
+                                        "detail": last_log,
+                                        "status": "warning",
+                                    },
+                                    node_tel,
+                                )
+                            )
+                        else:
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
+                                    {
+                                        "id": str(uuid.uuid4())[:8],
+                                        "timestamp": step_time,
+                                        "node": "node_4_adjudicator",
+                                        "title": f"{qa_mode}: ESCALATE ⚠️",
+                                        "detail": last_log,
+                                        "status": "danger",
+                                    },
+                                    node_tel,
+                                )
+                            )
+
+                        next_node = route_from_adjudicator(state)
+                        max_iters = getattr(main, "MAX_QA_ITERATIONS", 2)
+                        # Check if circuit breaker triggered (iteration >= MAX_QA_ITERATIONS on FAIL)
+                        if (
+                            next_node == main.END
+                            and "[FAIL]" in last_log
+                            and state.get("iteration_count", 0) >= max_iters
+                        ):
+                            state["error_log"].append(
+                                f"[ESCALATE] Circuit Breaker triggered after {state['iteration_count']} attempts. {last_log}"
+                            )
+                            session["timeline"].append(
                                 {
                                     "id": str(uuid.uuid4())[:8],
                                     "timestamp": step_time,
-                                    "node": "node_4_adjudicator",
-                                    "title": f"{qa_mode}: ESCALATE ⚠️",
-                                    "detail": last_log,
+                                    "node": "circuit_breaker",
+                                    "title": "Circuit Breaker הופעל (מקסימום איטרציות)",
+                                    "detail": "נדרשת הכוונה ידנית של המשתמש עבור הסוכן המשדרג.",
                                     "status": "danger",
-                                },
-                                node_tel,
+                                }
                             )
-                        )
+                    else:
+                        break
 
-                    next_node = route_from_adjudicator(state)
-                    max_iters = getattr(main, "MAX_QA_ITERATIONS", 2)
-                    # Check if circuit breaker triggered (iteration >= MAX_QA_ITERATIONS on FAIL)
-                    if (
-                        next_node == main.END
-                        and "[FAIL]" in last_log
-                        and state.get("iteration_count", 0) >= max_iters
-                    ):
-                        state["error_log"].append(
-                            f"[ESCALATE] Circuit Breaker triggered after {state['iteration_count']} attempts. {last_log}"
-                        )
-                        session["timeline"].append(
-                            {
-                                "id": str(uuid.uuid4())[:8],
-                                "timestamp": step_time,
-                                "node": "circuit_breaker",
-                                "title": "Circuit Breaker הופעל (מקסימום איטרציות)",
-                                "detail": "נדרשת הכוונה ידנית של המשתמש עבור הסוכן המשדרג.",
-                                "status": "danger",
-                            }
-                        )
+                    enrich_session(session)
+                    await asyncio.to_thread(save_session_record, owner_id, session_id)
+                    yield sse(
+                        "node_complete",
+                        {
+                            "node": current_node,
+                            "next_node": None if next_node == main.END else next_node,
+                            "telemetry": node_tel,
+                            "session": session,
+                        },
+                    )
+                    await asyncio.sleep(0)
+                    current_node = next_node
+
+                # Finalize status after graph reaches END
+                session["active_node"] = None
+                last_log = state["error_log"][-1] if state.get("error_log") else ""
+                if "[PASS]" in last_log:
+                    session["status"] = "passed"
+                    session["chat_history"].append(
+                        {
+                            "id": str(uuid.uuid4())[:8],
+                            "role": "assistant",
+                            "agent": "The Adjudicator (QA Architect)",
+                            "text": "🌟 **הפרומפט אושר בהצלחה (PASS)!**\nהפרומפט הסופי ותוכנית ה-XML מוכנים בחלונית התוצרים משמאל. תוכל להעתיק או להוריד אותם, או לשלוח הנחיית שדרוג נוספת בכל עת.",
+                            "thought": "",
+                            "is_system_verdict": True,
+                            "verdict": "PASS",
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        }
+                    )
+                elif "[ESCALATE]" in last_log:
+                    session["status"] = "escalated"
+                    session["chat_history"].append(
+                        {
+                            "id": str(uuid.uuid4())[:8],
+                            "role": "assistant",
+                            "agent": "Circuit Breaker (Escalation)",
+                            "text": f"⚠️ **מערכת בקרת האיכות עצרה להתערבות ידנית (ESCALATE).**\n\nפרטי הביקורת האחרונה:\n`{last_log}`\n\nכתוב לי כאן בתיבת ההודעות הוראת תיקון מדויקת ואעביר אותה ישירות ל-**Upgrader**.",
+                            "thought": "",
+                            "is_system_verdict": True,
+                            "verdict": "ESCALATE",
+                            "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        }
+                    )
                 else:
-                    break
+                    session["status"] = "interviewing"
 
                 enrich_session(session)
-                save_session_record(owner_id, session_id)
-                yield sse(
-                    "node_complete",
-                    {
-                        "node": current_node,
-                        "next_node": None if next_node == main.END else next_node,
-                        "telemetry": node_tel,
-                        "session": session,
-                    },
-                )
-                await asyncio.sleep(0)
-                current_node = next_node
+                await asyncio.to_thread(save_session_record, owner_id, session_id)
+                yield sse("done", session)
 
-            # Finalize status after graph reaches END
-            session["active_node"] = None
-            last_log = state["error_log"][-1] if state.get("error_log") else ""
-            if "[PASS]" in last_log:
-                session["status"] = "passed"
-                session["chat_history"].append(
-                    {
-                        "id": str(uuid.uuid4())[:8],
-                        "role": "assistant",
-                        "agent": "The Adjudicator (QA Architect)",
-                        "text": "🌟 **הפרומפט אושר בהצלחה (PASS)!**\nהפרומפט הסופי ותוכנית ה-XML מוכנים בחלונית התוצרים משמאל. תוכל להעתיק או להוריד אותם, או לשלוח הנחיית שדרוג נוספת בכל עת.",
-                        "thought": "",
-                        "is_system_verdict": True,
-                        "verdict": "PASS",
-                        "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    }
-                )
-            elif "[ESCALATE]" in last_log:
-                session["status"] = "escalated"
-                session["chat_history"].append(
+            except asyncio.CancelledError:
+                session["active_node"] = None
+                session["status"] = _resolve_non_compiling_status(session, state)
+                enrich_session(session)
+                try:
+                    await asyncio.shield(
+                        asyncio.to_thread(save_session_record, owner_id, session_id)
+                    )
+                except Exception as save_exc:
+                    logger.warning(
+                        "Failed to save cancelled session %s: %s", session_id, save_exc
+                    )
+                raise
+
+            except Exception as exc:
+                session["active_node"] = None
+                session["status"] = _resolve_non_compiling_status(session, state)
+                err_msg = main._sanitize_error_text(exc)
+                session["timeline"].append(
                     {
                         "id": str(uuid.uuid4())[:8],
-                        "role": "assistant",
-                        "agent": "Circuit Breaker (Escalation)",
-                        "text": f"⚠️ **מערכת בקרת האיכות עצרה להתערבות ידנית (ESCALATE).**\n\nפרטי הביקורת האחרונה:\n`{last_log}`\n\nכתוב לי כאן בתיבת ההודעות הוראת תיקון מדויקת ואעביר אותה ישירות ל-**Upgrader**.",
-                        "thought": "",
-                        "is_system_verdict": True,
-                        "verdict": "ESCALATE",
                         "timestamp": datetime.now().strftime("%H:%M:%S"),
+                        "node": "error",
+                        "title": "שגיאת ריצה",
+                        "detail": err_msg,
+                        "status": "danger",
                     }
                 )
-            else:
-                session["status"] = "interviewing"
+                enrich_session(session)
+                await asyncio.to_thread(save_session_record, owner_id, session_id)
+                yield sse("error", {"error": err_msg, "session": session})
 
-            enrich_session(session)
-            save_session_record(owner_id, session_id)
-            yield sse("done", session)
+            finally:
+                session["active_node"] = None
+                if session.get("status") == "compiling":
+                    session["status"] = _resolve_non_compiling_status(session, state)
+                _ACTIVE_STREAM_KEYS.discard(cache_key)
+                if session_lock.locked():
+                    session_lock.release()
 
-        except Exception as exc:
-            session["active_node"] = None
-            err_msg = str(exc)
-            session["timeline"].append(
-                {
-                    "id": str(uuid.uuid4())[:8],
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
-                    "node": "error",
-                    "title": "שגיאת ריצה",
-                    "detail": err_msg,
-                    "status": "danger",
-                }
-            )
-            enrich_session(session)
-            save_session_record(owner_id, session_id)
-            yield sse("error", {"error": err_msg, "session": session})
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+        streaming_started = True
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+    finally:
+        if not streaming_started:
+            _ACTIVE_STREAM_KEYS.discard(cache_key)
+            if session_lock.locked():
+                session_lock.release()
 
 
 # ==========================================
@@ -1230,40 +1450,59 @@ BETTY_WELCOME = {
     ),
 }
 
-BETTY_HISTORIES: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+BETTY_HISTORIES: "OrderedDict[str, Dict[str, List[Dict[str, Any]]]]" = OrderedDict()
 
 
-def init_betty_mode(owner_id: str, mode: str) -> List[Dict[str, Any]]:
-    now = datetime.now().strftime("%H:%M:%S")
-    owner_histories = BETTY_HISTORIES.setdefault(owner_id, {})
-    owner_histories[mode] = [
-        {
-            "id": str(uuid.uuid4())[:8],
-            "role": "assistant",
-            "mode": mode,
-            "text": BETTY_WELCOME.get(mode, BETTY_WELCOME["tech_support"]),
-            "thought": "",
-            "timestamp": now,
-        }
-    ]
-    return owner_histories[mode]
+def _trim_betty_history(history: List[Dict[str, Any]]) -> None:
+    if len(history) > MAX_BETTY_MESSAGES:
+        history[:] = [history[0]] + history[-(MAX_BETTY_MESSAGES - 1) :]
 
 
-def get_betty_histories(owner_id: str) -> Dict[str, List[Dict[str, Any]]]:
+def _welcome_betty_entry(mode: str) -> Dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4())[:8],
+        "role": "assistant",
+        "mode": mode,
+        "text": BETTY_WELCOME.get(mode, BETTY_WELCOME["tech_support"]),
+        "thought": "",
+        "timestamp": datetime.now().strftime("%H:%M:%S"),
+    }
+
+
+def _ensure_betty_histories_locked(owner_id: str) -> Dict[str, List[Dict[str, Any]]]:
     owner_histories = BETTY_HISTORIES.get(owner_id)
     if owner_histories is None:
         owner_histories = {}
         BETTY_HISTORIES[owner_id] = owner_histories
-    for mode in ("tech_support", "prompt_advisor"):
-        if mode not in owner_histories:
-            init_betty_mode(owner_id, mode)
+    BETTY_HISTORIES.move_to_end(owner_id)
+    while len(BETTY_HISTORIES) > MAX_BETTY_WORKSPACES:
+        BETTY_HISTORIES.popitem(last=False)
+    for m in ("tech_support", "prompt_advisor"):
+        if m not in owner_histories:
+            owner_histories[m] = [_welcome_betty_entry(m)]
     return owner_histories
 
 
+def init_betty_mode(owner_id: str, mode: str) -> List[Dict[str, Any]]:
+    with _CACHE_LOCK:
+        owner_histories = _ensure_betty_histories_locked(owner_id)
+        owner_histories[mode] = [_welcome_betty_entry(mode)]
+        return list(owner_histories[mode])
+
+
+def get_betty_histories(owner_id: str) -> Dict[str, List[Dict[str, Any]]]:
+    with _CACHE_LOCK:
+        owner_histories = _ensure_betty_histories_locked(owner_id)
+        return {
+            "tech_support": list(owner_histories["tech_support"]),
+            "prompt_advisor": list(owner_histories["prompt_advisor"]),
+        }
+
+
 class BettyChatRequest(BaseModel):
-    message: str
+    message: str = Field(..., min_length=1, max_length=12000)
     mode: str = "tech_support"  # "tech_support" | "prompt_advisor"
-    session_id: Optional[str] = None
+    session_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class BettyClearRequest(BaseModel):
@@ -1402,51 +1641,57 @@ async def get_betty_history(owner_id: str = Depends(resolve_owner_id)):
 async def clear_betty_history(
     req: BettyClearRequest, owner_id: str = Depends(resolve_owner_id)
 ):
-    histories = get_betty_histories(owner_id)
-    mode = req.mode if req.mode in histories else "tech_support"
-    init_betty_mode(owner_id, mode)
+    mode = req.mode if req.mode in ("tech_support", "prompt_advisor") else "tech_support"
+    history = init_betty_mode(owner_id, mode)
     return {
         "mode": mode,
-        "history": histories[mode],
+        "history": history,
     }
 
 
 @app.post("/api/betty/chat")
 async def betty_chat_endpoint(
-    req: BettyChatRequest, owner_id: str = Depends(resolve_owner_id)
+    req: BettyChatRequest,
+    request: Request,
+    owner_id: str = Depends(resolve_owner_id),
 ):
+    _enforce_rate_limit(request, "betty", 30, 60.0, identity=owner_id)
     mode = req.mode if req.mode in ["tech_support", "prompt_advisor"] else "tech_support"
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
 
     now = datetime.now().strftime("%H:%M:%S")
-    histories = get_betty_histories(owner_id)
-    history = histories[mode]
-
-    history.append(
-        {
-            "id": str(uuid.uuid4())[:8],
-            "role": "user",
-            "mode": mode,
-            "text": user_msg,
-            "timestamp": now,
-        }
-    )
+    with _CACHE_LOCK:
+        histories = _ensure_betty_histories_locked(owner_id)
+        history = histories[mode]
+        history.append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "role": "user",
+                "mode": mode,
+                "text": user_msg,
+                "timestamp": now,
+            }
+        )
+        _trim_betty_history(history)
+        recent_turns = list(history[1:-1][-10:])
 
     sys_prompt = (
         BETTY_TECH_SUPPORT_PROMPT
         if mode == "tech_support"
         else BETTY_PROMPT_ADVISOR_PROMPT
     )
-    session_ctx = build_session_context_for_betty(req.session_id, owner_id)
+    session_ctx = await asyncio.to_thread(
+        build_session_context_for_betty, req.session_id, owner_id
+    )
 
     lc_messages = [
         SystemMessage(content=f"{sys_prompt}\n\n{session_ctx}"),
     ]
 
     # Include recent conversation turns (excluding the initial static greeting)
-    for item in history[1:-1][-10:]:
+    for item in recent_turns:
         if item["role"] == "user":
             lc_messages.append(HumanMessage(content=item["text"]))
         else:
@@ -1471,28 +1716,43 @@ async def betty_chat_endpoint(
             "fallback_used": betty_tel.get("fallback_used", False),
             "timestamp": datetime.now().strftime("%H:%M:%S"),
         }
-        history.append(reply_item)
-        if req.session_id and (owner_id, req.session_id) in SESSIONS:
-            save_session_record(owner_id, req.session_id)
+        with _CACHE_LOCK:
+            histories = _ensure_betty_histories_locked(owner_id)
+            history = histories[mode]
+            history.append(reply_item)
+            _trim_betty_history(history)
+            history_snapshot = list(history)
+            should_save_session = bool(
+                req.session_id and (owner_id, req.session_id) in SESSIONS
+            )
+
+        if should_save_session and req.session_id:
+            await asyncio.to_thread(save_session_record, owner_id, req.session_id)
         return {
             "mode": mode,
             "reply": reply_item,
-            "history": history,
+            "history": history_snapshot,
         }
     except Exception as exc:
+        safe_err = main._sanitize_error_text(exc)
         err_item = {
             "id": str(uuid.uuid4())[:8],
             "role": "assistant",
             "mode": mode,
-            "text": f"⚠️ אירעה שגיאה בעת פנייה למודל: `{str(exc)}`",
+            "text": f"⚠️ אירעה שגיאה בעת פנייה למודל: `{safe_err}`",
             "thought": "",
             "timestamp": datetime.now().strftime("%H:%M:%S"),
         }
-        history.append(err_item)
+        with _CACHE_LOCK:
+            histories = _ensure_betty_histories_locked(owner_id)
+            history = histories[mode]
+            history.append(err_item)
+            _trim_betty_history(history)
+            history_snapshot = list(history)
         return {
             "mode": mode,
             "reply": err_item,
-            "history": history,
+            "history": history_snapshot,
         }
 
 

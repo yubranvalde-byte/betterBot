@@ -91,6 +91,8 @@ CONSTRUCT_MODEL = (os.environ.get("CONSTRUCT_MODEL") or COMPILER_MODEL).strip() 
 UPGRADER_MODEL = (os.environ.get("UPGRADER_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 ADJUDICATOR_MODEL = (os.environ.get("ADJUDICATOR_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 BETTY_MODEL = (os.environ.get("BETTY_MODEL") or FAST_MODEL).strip() or FAST_MODEL
+LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "90") or 90)
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "1") or 1)
 MAX_QA_ITERATIONS = 2
 MAX_LINTER_RETRIES = 1
 
@@ -129,6 +131,8 @@ def _get_chat_model(model_name: str, thinking_level: str) -> ChatGoogleGenerativ
                 temperature=0,
                 thinking_level=thinking_level,
                 google_api_key=GOOGLE_API_KEY,
+                timeout=LLM_TIMEOUT_SECONDS,
+                max_retries=LLM_MAX_RETRIES,
             )
             _MODEL_CLIENT_CACHE[key] = cached
         return cached
@@ -385,6 +389,29 @@ def get_model_routing_summary() -> Dict[str, Any]:
     return summary
 
 
+def _is_non_retryable_llm_error(exc: Exception) -> bool:
+    """Returns True for auth/permission failures that must not trigger fallback retries."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(exc, "code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in (401, 403):
+        return True
+    lowered = str(exc or "").lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "api key not valid",
+            "api_key_invalid",
+            "invalid api key",
+            "permission_denied",
+            "unauthenticated",
+            "missing_google_api_key",
+        )
+    )
+
+
 def _invoke_role_with_fallback(
     role: str,
     prompt_template: Any = None,
@@ -441,11 +468,18 @@ def _invoke_role_with_fallback(
             return result, telemetry
         except Exception as exc:
             last_exc = exc
+            safe_err = _sanitize_error_text(exc)
+            if _is_non_retryable_llm_error(exc):
+                print(
+                    f"    -> [ERROR] Non-retryable auth/permission error for role={role} "
+                    f"model={model_name}: {safe_err}"
+                )
+                break
             if idx < len(chain) - 1:
                 next_model, next_level = chain[idx + 1]
                 print(
                     f"    -> [WARN] Model '{model_name}' for role={role} "
-                    f"(thinking_level={level}) failed ({exc}); "
+                    f"(thinking_level={level}) failed ({safe_err}); "
                     f"falling back to '{next_model}' (thinking_level={next_level})."
                 )
     raise last_exc

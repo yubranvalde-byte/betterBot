@@ -1,13 +1,19 @@
 import json
+import logging
 import os
+import queue
 import sqlite3
 import tempfile
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from validators import normalize_artifact_path as _normalize_rel_path
+
+logger = logging.getLogger("betterbot.storage")
 
 DEFAULT_DB_PATH = Path(__file__).parent / "betterbot_history.db"
 FALLBACK_DB_PATH = Path(tempfile.gettempdir()) / "betterbot_history.db"
@@ -46,13 +52,76 @@ def _resolve_db_path() -> Path:
 
 DB_PATH: Path = _resolve_db_path()
 
+_PG_POOL_MAXSIZE = 6
+_PG_POOL_IDLE_TTL = 120.0
+_PG_POOL_LOCK = threading.Lock()
+_PG_POOLS: Dict[str, "queue.LifoQueue[Tuple[Any, float]]"] = {}
+
+
+def _get_pg_pool(db_url: str) -> "queue.LifoQueue[Tuple[Any, float]]":
+    with _PG_POOL_LOCK:
+        pool = _PG_POOLS.get(db_url)
+        if pool is None:
+            pool = queue.LifoQueue(maxsize=_PG_POOL_MAXSIZE)
+            _PG_POOLS[db_url] = pool
+        return pool
+
+
+def _close_quietly(raw_conn: Any) -> None:
+    try:
+        raw_conn.close()
+    except Exception:
+        pass
+
+
+def _acquire_pg_conn(db_url: str) -> Any:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    pool = _get_pg_pool(db_url)
+    now = time.monotonic()
+    while True:
+        try:
+            raw_conn, pooled_at = pool.get_nowait()
+        except queue.Empty:
+            break
+        if (
+            getattr(raw_conn, "closed", False)
+            or getattr(raw_conn, "broken", False)
+            or (now - pooled_at) > _PG_POOL_IDLE_TTL
+        ):
+            _close_quietly(raw_conn)
+            continue
+        return raw_conn
+    return psycopg.connect(db_url, row_factory=dict_row, connect_timeout=10)
+
+
+def _release_pg_conn(db_url: str, raw_conn: Any) -> None:
+    if (
+        not db_url
+        or getattr(raw_conn, "closed", False)
+        or getattr(raw_conn, "broken", False)
+    ):
+        _close_quietly(raw_conn)
+        return
+    try:
+        tx_status = getattr(getattr(raw_conn, "info", None), "transaction_status", 0)
+        if tx_status != 0:
+            raw_conn.rollback()
+        _get_pg_pool(db_url).put_nowait((raw_conn, time.monotonic()))
+    except Exception:
+        _close_quietly(raw_conn)
+
 
 class _ConnAdapter:
     """Unified connection adapter normalizing SQL placeholders and lifecycle across SQLite and PostgreSQL."""
 
-    def __init__(self, conn: Any, is_postgres: bool) -> None:
+    def __init__(self, conn: Any, is_postgres: bool, db_url: str = "") -> None:
         self._conn = conn
         self.is_postgres = is_postgres
+        self._db_url = db_url
+        self._closed = False
+        self._healthy = True
 
     def execute(self, sql: str, params: Any = ()) -> Any:
         adapted_sql = sql.replace("?", "%s") if self.is_postgres else sql
@@ -65,7 +134,13 @@ class _ConnAdapter:
         self._conn.rollback()
 
     def close(self) -> None:
-        self._conn.close()
+        if self._closed:
+            return
+        self._closed = True
+        if self.is_postgres and self._healthy:
+            _release_pg_conn(self._db_url, self._conn)
+        else:
+            _close_quietly(self._conn)
 
     def __enter__(self) -> "_ConnAdapter":
         return self
@@ -75,22 +150,22 @@ class _ConnAdapter:
             if exc_type is None:
                 self._conn.commit()
             else:
+                self._healthy = False
                 self._conn.rollback()
+        except Exception:
+            self._healthy = False
         finally:
-            self._conn.close()
+            self.close()
 
 
 def _get_conn() -> _ConnAdapter:
     db_url = _get_database_url()
     if db_url:
-        import psycopg
-        from psycopg.rows import dict_row
-
-        raw_conn = psycopg.connect(db_url, row_factory=dict_row, connect_timeout=10)
-        return _ConnAdapter(raw_conn, is_postgres=True)
+        return _ConnAdapter(_acquire_pg_conn(db_url), is_postgres=True, db_url=db_url)
 
     raw_conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=10.0)
     raw_conn.row_factory = sqlite3.Row
+    raw_conn.execute("PRAGMA busy_timeout=5000;")
     return _ConnAdapter(raw_conn, is_postgres=False)
 
 
@@ -227,8 +302,8 @@ def _migrate_snapshot_if_present(conn: _ConnAdapter) -> None:
                     ),
                 )
             conn.commit()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to migrate legacy snapshot %s: %s", snap_path, exc)
 
 
 def init_db() -> None:
@@ -274,8 +349,46 @@ def init_db() -> None:
         _migrate_snapshot_if_present(conn)
 
 
+def _upsert_session_row(
+    conn: _ConnAdapter,
+    session_id: str,
+    owner: str,
+    meta: Dict[str, Any],
+    created_iso: str,
+    updated_iso: str,
+    serialized: str,
+) -> None:
+    cur = conn.execute(
+        """
+        INSERT INTO sessions (
+            session_id, owner_id, title, target_type, status,
+            created_at, updated_at, state_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (session_id) DO UPDATE SET
+            title = EXCLUDED.title,
+            target_type = EXCLUDED.target_type,
+            status = EXCLUDED.status,
+            updated_at = EXCLUDED.updated_at,
+            state_json = EXCLUDED.state_json
+        WHERE sessions.owner_id = EXCLUDED.owner_id
+        """,
+        (
+            session_id,
+            owner,
+            meta["title"],
+            meta["target_type"],
+            meta["status"],
+            created_iso,
+            updated_iso,
+            serialized,
+        ),
+    )
+    if cur.rowcount == 0:
+        raise PermissionError("Session belongs to another workspace")
+
+
 def save_session(session_id: str, session_data: Dict[str, Any], owner_id: str) -> None:
-    """Persists or updates a complete BetterBot session in SQLite, scoped to owner_id."""
+    """Persists or updates a complete BetterBot session in storage, scoped to owner_id."""
     owner = _require_owner_id(owner_id)
     if not (session_id or "").strip():
         raise ValueError("session_id is required")
@@ -291,39 +404,15 @@ def save_session(session_id: str, session_data: Dict[str, Any], owner_id: str) -
     serialized = json.dumps(payload_to_store, ensure_ascii=False)
 
     with _get_conn() as conn:
-        existing = conn.execute(
-            "SELECT owner_id FROM sessions WHERE session_id = ?", (session_id,)
-        ).fetchone()
-        if existing and existing["owner_id"] != owner:
-            raise PermissionError("Session belongs to another workspace")
-
-        cur = conn.execute(
-            """
-            INSERT INTO sessions (
-                session_id, owner_id, title, target_type, status,
-                created_at, updated_at, state_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (session_id) DO UPDATE SET
-                title = EXCLUDED.title,
-                target_type = EXCLUDED.target_type,
-                status = EXCLUDED.status,
-                updated_at = EXCLUDED.updated_at,
-                state_json = EXCLUDED.state_json
-            WHERE sessions.owner_id = EXCLUDED.owner_id
-            """,
-            (
-                session_id,
-                owner,
-                meta["title"],
-                meta["target_type"],
-                meta["status"],
-                created_iso,
-                now_iso,
-                serialized,
-            ),
+        _upsert_session_row(
+            conn,
+            session_id,
+            owner,
+            meta,
+            created_iso,
+            now_iso,
+            serialized,
         )
-        if cur.rowcount == 0:
-            raise PermissionError("Session belongs to another workspace")
         conn.commit()
 
 
@@ -351,30 +440,43 @@ def load_session(session_id: str, owner_id: str) -> Optional[Dict[str, Any]]:
             data["updated_at_iso"] = row["updated_at"]
             _hydrate_session_reference_files(data)
             return data
-    except Exception:
+    except Exception as exc:
+        logger.warning("Failed to deserialize session %s for owner %s: %s", session_id, owner_id, exc)
         return None
     return None
 
 
-def list_sessions(owner_id: str) -> List[Dict[str, Any]]:
-    """Returns metadata for saved creations owned by owner_id ordered by updated_at DESC."""
-    owner = _require_owner_id(owner_id)
-    with _get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT session_id, title, target_type, status, created_at, updated_at, state_json
-            FROM sessions
-            WHERE owner_id = ?
-            ORDER BY updated_at DESC
-            """,
-            (owner,),
-        ).fetchall()
+def _parse_rubric_scores_json(raw_rubric: Any) -> Dict[str, Any]:
+    if isinstance(raw_rubric, dict):
+        return raw_rubric
+    if isinstance(raw_rubric, str) and raw_rubric.strip():
+        try:
+            parsed = json.loads(raw_rubric)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception as exc:
+            logger.warning("Failed to parse rubric_scores JSON snippet: %s", exc)
+    return {}
+
+
+def _list_sessions_fallback(conn: _ConnAdapter, owner: str) -> List[Dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT session_id, title, target_type, status, created_at, updated_at, state_json
+        FROM sessions
+        WHERE owner_id = ?
+        ORDER BY updated_at DESC
+        """,
+        (owner,),
+    ).fetchall()
 
     results: List[Dict[str, Any]] = []
     for row in rows:
         try:
             sess = json.loads(row["state_json"])
-        except Exception:
+            if not isinstance(sess, dict):
+                sess = {}
+        except Exception as exc:
+            logger.warning("Corrupted state_json in list_sessions fallback (%s): %s", row["session_id"], exc)
             sess = {}
         meta = _extract_metadata(sess)
         results.append(
@@ -390,6 +492,108 @@ def list_sessions(owner_id: str) -> List[Dict[str, Any]]:
                 "updated_at_iso": row["updated_at"],
                 "iteration_count": meta["iteration_count"],
                 "rubric_scores": meta["rubric_scores"],
+            }
+        )
+    return results
+
+
+def list_sessions(owner_id: str) -> List[Dict[str, Any]]:
+    """Returns metadata for saved creations owned by owner_id ordered by updated_at DESC."""
+    owner = _require_owner_id(owner_id)
+    with _get_conn() as conn:
+        try:
+            if conn.is_postgres:
+                sql = """
+                SELECT
+                    session_id,
+                    title,
+                    target_type,
+                    status,
+                    created_at,
+                    updated_at,
+                    COALESCE(
+                        NULLIF(state_json::jsonb ->> 'slug_name', ''),
+                        NULLIF(state_json::jsonb -> 'state' ->> 'slug_name', ''),
+                        NULLIF(state_json::jsonb -> 'parsed_blueprint' ->> 'slug_name', ''),
+                        ''
+                    ) AS slug_name,
+                    COALESCE(NULLIF(state_json::jsonb ->> 'created_at', ''), created_at) AS display_created_at,
+                    COALESCE(NULLIF(state_json::jsonb ->> 'updated_at', ''), updated_at) AS display_updated_at,
+                    state_json::jsonb -> 'state' ->> 'iteration_count' AS iteration_count,
+                    COALESCE(
+                        NULLIF(state_json::jsonb -> 'rubric_scores', '{}'::jsonb),
+                        NULLIF(state_json::jsonb -> 'state' -> 'rubric_scores', '{}'::jsonb),
+                        '{}'::jsonb
+                    )::text AS rubric_scores_json,
+                    COALESCE(
+                        NULLIF(state_json::jsonb ->> 'target_type', ''),
+                        NULLIF(state_json::jsonb -> 'state' ->> 'target_type', ''),
+                        NULLIF(state_json::jsonb -> 'parsed_blueprint' ->> 'target_type', ''),
+                        'SYSTEM_PROMPT'
+                    ) AS fallback_target_type,
+                    COALESCE(NULLIF(state_json::jsonb ->> 'status', ''), 'idle') AS fallback_status
+                FROM sessions
+                WHERE owner_id = ?
+                ORDER BY updated_at DESC
+                """
+            else:
+                sql = """
+                SELECT
+                    session_id,
+                    title,
+                    target_type,
+                    status,
+                    created_at,
+                    updated_at,
+                    COALESCE(
+                        NULLIF(json_extract(state_json, '$.slug_name'), ''),
+                        NULLIF(json_extract(state_json, '$.state.slug_name'), ''),
+                        NULLIF(json_extract(state_json, '$.parsed_blueprint.slug_name'), ''),
+                        ''
+                    ) AS slug_name,
+                    COALESCE(NULLIF(json_extract(state_json, '$.created_at'), ''), created_at) AS display_created_at,
+                    COALESCE(NULLIF(json_extract(state_json, '$.updated_at'), ''), updated_at) AS display_updated_at,
+                    COALESCE(json_extract(state_json, '$.state.iteration_count'), 0) AS iteration_count,
+                    COALESCE(
+                        NULLIF(NULLIF(json_extract(state_json, '$.rubric_scores'), '{}'), ''),
+                        NULLIF(NULLIF(json_extract(state_json, '$.state.rubric_scores'), '{}'), ''),
+                        '{}'
+                    ) AS rubric_scores_json,
+                    COALESCE(
+                        NULLIF(json_extract(state_json, '$.target_type'), ''),
+                        NULLIF(json_extract(state_json, '$.state.target_type'), ''),
+                        NULLIF(json_extract(state_json, '$.parsed_blueprint.target_type'), ''),
+                        'SYSTEM_PROMPT'
+                    ) AS fallback_target_type,
+                    COALESCE(NULLIF(json_extract(state_json, '$.status'), ''), 'idle') AS fallback_status
+                FROM sessions
+                WHERE owner_id = ?
+                ORDER BY updated_at DESC
+                """
+            rows = conn.execute(sql, (owner,)).fetchall()
+        except Exception as exc:
+            logger.warning("Fast list_sessions SQL path failed, using fallback parse: %s", exc)
+            return _list_sessions_fallback(conn, owner)
+
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            iter_count = int(row["iteration_count"] or 0)
+        except (TypeError, ValueError):
+            iter_count = 0
+        results.append(
+            {
+                "session_id": row["session_id"],
+                "title": row["title"],
+                "target_type": row["target_type"] or row["fallback_target_type"],
+                "slug_name": str(row["slug_name"] or ""),
+                "status": row["status"] or row["fallback_status"],
+                "created_at": row["display_created_at"] or row["created_at"],
+                "updated_at": row["display_updated_at"] or row["updated_at"],
+                "created_at_iso": row["created_at"],
+                "updated_at_iso": row["updated_at"],
+                "iteration_count": iter_count,
+                "rubric_scores": _parse_rubric_scores_json(row["rubric_scores_json"]),
             }
         )
     return results
@@ -444,7 +648,8 @@ def export_workspace_sessions(owner_id: str) -> List[Dict[str, Any]]:
     for row in rows:
         try:
             data = json.loads(row["state_json"])
-        except Exception:
+        except Exception as exc:
+            logger.warning("Skipping corrupted session %s during export: %s", row["session_id"], exc)
             continue
         if not isinstance(data, dict):
             continue
@@ -531,33 +736,15 @@ def import_workspace_sessions(owner_id: str, sessions_payload: Any) -> Dict[str,
             meta = _extract_metadata(sess)
             serialized = json.dumps(sess, ensure_ascii=False)
 
-            cur = conn.execute(
-                """
-                INSERT INTO sessions (
-                    session_id, owner_id, title, target_type, status,
-                    created_at, updated_at, state_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (session_id) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    target_type = EXCLUDED.target_type,
-                    status = EXCLUDED.status,
-                    updated_at = EXCLUDED.updated_at,
-                    state_json = EXCLUDED.state_json
-                WHERE sessions.owner_id = EXCLUDED.owner_id
-                """,
-                (
-                    sid,
-                    owner,
-                    meta["title"],
-                    meta["target_type"],
-                    meta["status"],
-                    created_iso,
-                    updated_iso,
-                    serialized,
-                ),
+            _upsert_session_row(
+                conn,
+                sid,
+                owner,
+                meta,
+                created_iso,
+                updated_iso,
+                serialized,
             )
-            if cur.rowcount == 0:
-                raise PermissionError("Session belongs to another workspace")
 
             if existing:
                 updated += 1
