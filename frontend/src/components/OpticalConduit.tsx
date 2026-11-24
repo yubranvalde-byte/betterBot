@@ -1,5 +1,4 @@
 import { useId } from 'react';
-import { motion } from 'motion/react';
 
 export type ConduitState = 'idle' | 'ambient' | 'completed' | 'active' | 'amber';
 
@@ -375,51 +374,5 @@ export function MicroConduitConnector({ state }: { state: ConduitState }) {
         />
       )}
     </svg>
-  );
-}
-
-interface GlassGaugeTubeProps {
-  percent: number;
-  variant?: 'prism' | 'emerald' | 'amber' | 'crimson';
-  height?: 'xs' | 'sm' | 'md';
-  className?: string;
-}
-
-export function GlassGaugeTube({
-  percent,
-  variant = 'emerald',
-  height = 'sm',
-  className = '',
-}: GlassGaugeTubeProps) {
-  const clamped = Math.max(0, Math.min(100, percent));
-
-  const heightCls =
-    height === 'xs' ? 'h-1.5' : height === 'md' ? 'h-2.5' : 'h-2';
-
-  const fillStyle =
-    variant === 'prism'
-      ? 'bg-gradient-to-r from-prism-cyan via-prism-violet to-prism-peach'
-      : variant === 'amber'
-      ? 'bg-gradient-to-r from-amber to-prism-peach'
-      : variant === 'crimson'
-      ? 'bg-crimson'
-      : 'bg-gradient-to-r from-emerald to-[#34D399]';
-
-  return (
-    <div
-      dir="ltr"
-      className={`relative w-full ${heightCls} rounded-full bg-recessed border border-hairline-strong/80 shadow-[inset_0_1px_2px_rgba(17,18,22,0.08)] overflow-hidden ${className}`}
-    >
-      <motion.div
-        initial={false}
-        animate={{ width: `${clamped}%` }}
-        transition={{ duration: 0.28, ease: [0.2, 0, 0, 1] }}
-        className={`h-full rounded-full ${fillStyle}`}
-      />
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-0.5 top-0 h-[40%] rounded-full bg-gradient-to-b from-white/75 to-transparent"
-      />
-    </div>
   );
 }

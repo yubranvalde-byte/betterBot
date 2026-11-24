@@ -58,18 +58,10 @@ PROMPT_EXPORTS = (
 
 
 def _load_normalize_artifact_path() -> Tuple[Callable[[str], str], str]:
-    """
-    Loads `normalize_artifact_path` from `main.py`, falling back to `validators.py`
-    when third-party LangChain/LangGraph packages are absent from system Python.
-    """
-    try:
-        from main import normalize_artifact_path
+    """Loads `normalize_artifact_path` directly from stdlib-only `validators.py`."""
+    from validators import normalize_artifact_path
 
-        return normalize_artifact_path, "direct import (main)"
-    except ModuleNotFoundError:
-        from validators import normalize_artifact_path
-
-        return normalize_artifact_path, "stdlib import (validators)"
+    return normalize_artifact_path, "stdlib import (validators)"
 
 
 def check_git_branch() -> Tuple[str, str]:
@@ -100,11 +92,18 @@ def check_git_branch() -> Tuple[str, str]:
 
 
 def check_path_sanitizer() -> Tuple[str, str]:
-    """Check 2: Verify `normalize_artifact_path` rejects invalid/traversal paths and accepts valid ones."""
+    """Check 2: Verify `normalize_artifact_path` rejects invalid/traversal paths and matches `storage.py`."""
     try:
         normalize_fn, loader_mode = _load_normalize_artifact_path()
+        import storage as storage_mod
     except Exception as exc:
         return "FAIL", f"failed to load normalize_artifact_path: {exc}"
+
+    if getattr(storage_mod, "_normalize_rel_path", None) is not normalize_fn:
+        return (
+            "FAIL",
+            "storage._normalize_rel_path is not aliased to validators.normalize_artifact_path",
+        )
 
     invalid_cases = [
         "",
@@ -214,9 +213,11 @@ def check_rubric_parity() -> Tuple[str, str]:
     if missing_readiness:
         return "FAIL", f"HELPER_READINESS_QUESTIONS missing flags: {', '.join(missing_readiness)}"
 
+    if "{user_input}" in prompts_mod.HELPER_PROMPT:
+        return "FAIL", "HELPER_PROMPT must not duplicate {user_input} (belongs in human message only)"
+
     try:
         prompts_mod.HELPER_PROMPT.format(
-            user_input="u",
             missing_fields_hint="m",
             needs_scripts="False",
             is_repo_context="True",

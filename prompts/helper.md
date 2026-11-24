@@ -94,7 +94,3 @@ When the core requirements are clear (or `ready_to_compile` is Yes / max 3 turns
 <missing_fields_hint>
 {missing_fields_hint}
 </missing_fields_hint>
-
-<user_input>
-{user_input}
-</user_input>

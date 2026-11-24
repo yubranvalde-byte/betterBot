@@ -4,8 +4,6 @@ import io
 import json
 import os
 import re
-import tempfile
-import time
 import uuid
 import zipfile
 from datetime import datetime, timezone
@@ -14,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel
@@ -302,25 +300,7 @@ def create_new_session(
 ) -> Dict[str, Any]:
     session_id = session_id or uuid.uuid4().hex[:12]
     now = datetime.now().strftime("%H:%M:%S")
-    state: FactoryState = {
-        "user_input": "",
-        "champion_xml": "",
-        "champion_prompt": "",
-        "challenger_xml": "",
-        "challenger_prompt": "",
-        "error_log": [],
-        "iteration_count": 0,
-        "linter_retries": 0,
-        "linter_result": {},
-        "target_type": "SYSTEM_PROMPT",
-        "slug_name": "",
-        "needs_scripts": False,
-        "is_repo_context": False,
-        "reference_files": {},
-        "rubric_scores": {},
-        "readiness_scores": {},
-        "model_telemetry": {},
-    }
+    state: FactoryState = main.make_initial_state()
     session = {
         "session_id": session_id,
         "title": title,
@@ -498,9 +478,9 @@ async def serve_index():
 async def health_check():
     return {
         "status": "ok",
-        "model": getattr(main.llm, "model", main.FAST_MODEL),
+        "model": main.FAST_MODEL,
         "fast_model": main.FAST_MODEL,
-        "compiler_model": getattr(main.compiler_llm, "model", main.COMPILER_MODEL),
+        "compiler_model": main.COMPILER_MODEL,
         "fallback_model": main.FALLBACK_MODEL,
         "decision_model": main.DECISION_MODEL,
         "routing": main.get_model_routing_summary(),
@@ -898,7 +878,8 @@ async def stream_factory_execution(
             state["user_input"] = user_msg
         else:
             last_helper = state.get("challenger_xml", "")
-            state["user_input"] += f"\nAssistant: {last_helper}\nUser: {user_msg}"
+            clean_helper = extract_helper_parts(last_helper)["chat_text"]
+            state["user_input"] += f"\nAssistant: {clean_helper}\nUser: {user_msg}"
 
     save_session_record(owner_id, session_id)
 

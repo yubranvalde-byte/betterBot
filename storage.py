@@ -1,12 +1,13 @@
 import json
 import os
-import re
 import sqlite3
 import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from validators import normalize_artifact_path as _normalize_rel_path
 
 DEFAULT_DB_PATH = Path(__file__).parent / "betterbot_history.db"
 FALLBACK_DB_PATH = Path(tempfile.gettempdir()) / "betterbot_history.db"
@@ -23,9 +24,6 @@ def _normalize_database_url(raw_url: str) -> str:
 
 def _get_database_url() -> str:
     return _normalize_database_url(os.getenv("DATABASE_URL", ""))
-
-
-DATABASE_URL: str = _get_database_url()
 
 
 def _resolve_db_path() -> Path:
@@ -105,28 +103,6 @@ def _require_owner_id(owner_id: str) -> str:
     if not clean:
         raise ValueError("owner_id is required")
     return clean
-
-
-def _normalize_rel_path(raw_path: Any) -> str:
-    if not isinstance(raw_path, str):
-        return ""
-    cleaned = raw_path.strip().strip("`\"'").strip()
-    if not cleaned or "\x00" in cleaned:
-        return ""
-    if (
-        re.match(r"^[a-zA-Z]:", cleaned)
-        or cleaned.startswith("\\")
-        or cleaned.startswith("/")
-    ):
-        return ""
-    cleaned = cleaned.replace("\\", "/").strip("/")
-    if not cleaned:
-        return ""
-    segments = cleaned.split("/")
-    for seg in segments:
-        if not seg or seg in (".", "..") or ":" in seg:
-            return ""
-    return "/".join(segments)
 
 
 def _sanitize_reference_files(raw_refs: Any) -> Dict[str, str]:

@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from prompts import (
     ADJUDICATOR_BASELINE_PROMPT,
     ADJUDICATOR_REGRESSION_PROMPT,
-    ADJUDICATOR_RUBRIC_QUESTIONS,
     CONSTRUCT_PROMPT,
     HELPER_PROMPT,
     HELPER_READINESS_QUESTIONS,
@@ -147,15 +146,6 @@ def sanitize_model_overrides(raw_overrides: Optional[Dict[str, Any]]) -> Dict[st
         if canonical_role and _MODEL_NAME_RE.match(model_candidate):
             cleaned[canonical_role] = model_candidate
     return cleaned
-
-
-llm = _get_chat_model(FAST_MODEL, "low")
-helper_llm = _get_chat_model(HELPER_MODEL, "low")
-construct_llm = _get_chat_model(CONSTRUCT_MODEL, "medium")
-compiler_llm = _get_chat_model(COMPILER_MODEL, "medium")
-upgrader_llm = _get_chat_model(UPGRADER_MODEL, "medium")
-adjudicator_llm = _get_chat_model(ADJUDICATOR_MODEL, "low")
-betty_llm = _get_chat_model(BETTY_MODEL, "low")
 
 
 def _normalize_content(raw_content: Any) -> str:
@@ -461,34 +451,6 @@ def _invoke_role_with_fallback(
     raise last_exc
 
 
-def _invoke_with_compiler_fallback(
-    prompt_template: Any,
-    inputs: Dict[str, Any],
-    structured_schema: Any = None,
-    target_type: str = "SYSTEM_PROMPT",
-) -> Any:
-    """Backward-compatible wrapper routing Construct/Upgrader calls through `_invoke_role_with_fallback`."""
-    normalized_target = (target_type or "SYSTEM_PROMPT").strip().upper()
-    role = "node_3_upgrader" if structured_schema is not None else "node_2_construct"
-    thinking_level = (
-        "medium"
-        if (
-            role == "node_3_upgrader"
-            or normalized_target in ("HYBRID_BUNDLE", "SKILL_PACKAGE", "SKILL_SUITE")
-        )
-        else "low"
-    )
-    result, _ = _invoke_role_with_fallback(
-        role=role,
-        prompt_template=prompt_template,
-        inputs=inputs,
-        structured_schema=structured_schema,
-        thinking_level=thinking_level,
-        target_type=normalized_target,
-    )
-    return result
-
-
 def invoke_betty(
     messages: List[Any], model_override: Optional[str] = None
 ) -> Tuple[Any, Dict[str, Any]]:
@@ -500,6 +462,17 @@ def invoke_betty(
         thinking_level="low",
         model_overrides=overrides,
     )
+
+
+_DECISION_HTTP_SESSION = requests.Session()
+
+
+def _sanitize_error_text(raw_err: Any) -> str:
+    """Redacts configured API keys and `key=` query parameters from exception strings."""
+    msg = str(raw_err or "")
+    if GOOGLE_API_KEY and GOOGLE_API_KEY != "MISSING_GOOGLE_API_KEY":
+        msg = msg.replace(GOOGLE_API_KEY, "[REDACTED]")
+    return re.sub(r"(?i)([?&]key=)[^&\s]+", r"\1[REDACTED]", msg)
 
 
 def evaluate_with_decision_model(
@@ -562,10 +535,7 @@ def evaluate_with_decision_model(
                 "instructions": q_text,
             }
 
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/decisions"
-        f"?key={GOOGLE_API_KEY}"
-    )
+    url = "https://generativelanguage.googleapis.com/v1beta/decisions"
     payload = {
         "model": DECISION_MODEL,
         "input": context_text.strip() or "No context provided.",
@@ -574,7 +544,12 @@ def evaluate_with_decision_model(
 
     t0 = time.perf_counter()
     try:
-        resp = requests.post(url, json=payload, timeout=5.0)
+        resp = _DECISION_HTTP_SESSION.post(
+            url,
+            headers={"x-goog-api-key": GOOGLE_API_KEY},
+            json=payload,
+            timeout=5.0,
+        )
         resp.raise_for_status()
         latency_ms = (time.perf_counter() - t0) * 1000.0
         data = resp.json()
@@ -637,15 +612,16 @@ def evaluate_with_decision_model(
         return result
     except Exception as exc:
         latency_ms = (time.perf_counter() - t0) * 1000.0
+        safe_err = _sanitize_error_text(exc)
         print(
             f"    -> [DecisionEngine] latency_ms={latency_ms:.1f} "
-            f"status=fallback error={exc}"
+            f"status=fallback error={safe_err}"
         )
         return {
             "used_decision_model": False,
             "answers": {},
             "latency_ms": round(latency_ms, 1),
-            "error": str(exc),
+            "error": safe_err,
         }
 
 
@@ -1217,16 +1193,6 @@ class AdjudicatorDecision(BaseModel):
     )
 
 
-RUBRIC_SCORE_KEYS = (
-    "intent_alignment",
-    "token_density_no_bloat",
-    "trigger_precision",
-    "progressive_disclosure",
-    "actionable_clarity",
-    "output_contract_strength",
-)
-
-
 def node_adjudicator(state: FactoryState):
     """
     Node 4 (The Adjudicator 2.0 - QA): Two-stage hybrid gatekeeper combining
@@ -1625,13 +1591,6 @@ def route_from_adjudicator(state: FactoryState):
     return END
 
 
-# Backward/Alias exports
-helper_node = node_helper
-construct_node = node_construct
-upgrader_node = node_upgrader
-adjudicator_node = node_adjudicator
-check_blueprint = route_from_helper
-
 builder = StateGraph(FactoryState)
 
 # 1. Add Nodes
@@ -1658,17 +1617,10 @@ graph = builder.compile()
 # ==========================================
 
 
-def run_factory():
-    print("\n" + "=" * 50)
-    print("🧠 Welcome to The Intelligence Factory (BetterBot 2.0) 🧠")
-    print("=" * 50)
-
-    initial_input = input(
-        "\n[System] Describe the AI Agent or Skill you want to build:\nYou: "
-    )
-
-    state: FactoryState = {
-        "user_input": initial_input,
+def make_initial_state(user_input: str = "") -> FactoryState:
+    """Returns a canonical initial FactoryState dictionary."""
+    return {
+        "user_input": user_input,
         "champion_xml": "",
         "champion_prompt": "",
         "challenger_xml": "",
@@ -1686,6 +1638,28 @@ def run_factory():
         "readiness_scores": {},
         "model_telemetry": {},
     }
+
+
+def _strip_thought_process(text: str) -> str:
+    """Removes internal <thought_process> blocks before appending assistant turns to history."""
+    return re.sub(
+        r"<thought_process>.*?</thought_process>",
+        "",
+        text or "",
+        flags=re.DOTALL | re.IGNORECASE,
+    ).strip()
+
+
+def run_factory():
+    print("\n" + "=" * 50)
+    print("🧠 Welcome to The Intelligence Factory (BetterBot 2.0) 🧠")
+    print("=" * 50)
+
+    initial_input = input(
+        "\n[System] Describe the AI Agent or Skill you want to build:\nYou: "
+    )
+
+    state: FactoryState = make_initial_state(initial_input)
 
     while True:
         print("\n[System] Invoking the Graph...")
@@ -1711,7 +1685,8 @@ def run_factory():
                 print(challenger_xml)
 
             user_reply = input("\nYou: ")
-            state["user_input"] += f"\nAssistant: {challenger_xml}\nUser: {user_reply}"
+            clean_helper = _strip_thought_process(challenger_xml)
+            state["user_input"] += f"\nAssistant: {clean_helper}\nUser: {user_reply}"
             continue
 
         # Scenario C: Final approval
