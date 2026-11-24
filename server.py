@@ -1068,8 +1068,15 @@ async def stream_factory_execution(
             state["error_log"] = list(state.get("error_log", [])) + [
                 f"[MANUAL OVERRIDE] {user_msg}"
             ]
-            state["iteration_count"] = 1
+            state["iteration_count"] = 0
             state["linter_retries"] = 0
+            if isinstance(state.get("rubric_scores"), dict):
+                state["rubric_scores"] = {
+                    k: v
+                    for k, v in state["rubric_scores"].items()
+                    if k != "weighted_average"
+                }
+            state.pop("previous_weighted_avg", None)
             session["timeline"].append(
                 {
                     "id": str(uuid.uuid4())[:8],
@@ -1281,7 +1288,6 @@ async def stream_factory_execution(
                         _apply_node_update(state, update)
                         node_tel = (update.get("model_telemetry") or {}).get("node_4_adjudicator") or {}
 
-                        new_logs = update.get("error_log") or []
                         last_log = state["error_log"][-1] if state.get("error_log") else ""
                         qa_mode = "Baseline QA" if prev_iter == 0 else f"Regression QA (#{prev_iter})"
 
@@ -1299,7 +1305,7 @@ async def stream_factory_execution(
                                     node_tel,
                                 )
                             )
-                        elif "[FAIL]" in last_log and "[ESCALATE]" not in last_log:
+                        elif "[FAIL]" in last_log:
                             session["timeline"].append(
                                 _attach_timeline_telemetry(
                                     {
@@ -1314,45 +1320,19 @@ async def stream_factory_execution(
                                 )
                             )
                         else:
-                            fail_detail = new_logs[0] if len(new_logs) >= 2 and "[FAIL]" in new_logs[0] else ""
-                            if fail_detail:
-                                session["timeline"].append(
-                                    _attach_timeline_telemetry(
-                                        {
-                                            "id": str(uuid.uuid4())[:8],
-                                            "timestamp": step_time,
-                                            "node": "node_4_adjudicator",
-                                            "title": f"{qa_mode}: FAIL 🔄",
-                                            "detail": fail_detail,
-                                            "status": "warning",
-                                        },
-                                        node_tel,
-                                    )
-                                )
-                                session["timeline"].append(
+                            session["timeline"].append(
+                                _attach_timeline_telemetry(
                                     {
                                         "id": str(uuid.uuid4())[:8],
                                         "timestamp": step_time,
-                                        "node": "circuit_breaker",
-                                        "title": "Circuit Breaker הופעל (מקסימום איטרציות)",
-                                        "detail": "נדרשת הכוונה ידנית של המשתמש עבור הסוכן המשדרג.",
+                                        "node": "node_4_adjudicator",
+                                        "title": f"{qa_mode}: ESCALATE ⚠️",
+                                        "detail": last_log,
                                         "status": "danger",
-                                    }
+                                    },
+                                    node_tel,
                                 )
-                            else:
-                                session["timeline"].append(
-                                    _attach_timeline_telemetry(
-                                        {
-                                            "id": str(uuid.uuid4())[:8],
-                                            "timestamp": step_time,
-                                            "node": "node_4_adjudicator",
-                                            "title": f"{qa_mode}: ESCALATE ⚠️",
-                                            "detail": last_log,
-                                            "status": "danger",
-                                        },
-                                        node_tel,
-                                    )
-                                )
+                            )
                     else:
                         break
 

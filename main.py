@@ -1509,17 +1509,16 @@ def node_adjudicator(state: FactoryState):
         state_update["error_log"] = ["[PASS] System approved."]
 
     if decision.status in ["FAIL", "ESCALATE"]:
-        formatted_message = (
-            f"[{decision.status}] Reason: {decision.reason} | "
-            f"Directive: {decision.correction_directive}"
-        )
         if decision.status == "FAIL" and (iteration_count + 1) >= MAX_QA_ITERATIONS:
             state_update["error_log"] = [
-                formatted_message,
-                f"[ESCALATE] Circuit Breaker triggered after {iteration_count + 1} attempts. {formatted_message}",
+                f"[ESCALATE] Circuit Breaker triggered after {iteration_count + 1} attempts. "
+                f"Reason: {decision.reason} | Directive: {decision.correction_directive}"
             ]
         else:
-            state_update["error_log"] = [formatted_message]
+            state_update["error_log"] = [
+                f"[{decision.status}] Reason: {decision.reason} | "
+                f"Directive: {decision.correction_directive}"
+            ]
 
     return state_update
 
@@ -1780,8 +1779,15 @@ def run_factory():
                 break
 
             state["error_log"].append(f"[MANUAL OVERRIDE] {user_correction}")
-            state["iteration_count"] = 1
+            state["iteration_count"] = 0
             state["linter_retries"] = 0
+            if isinstance(state.get("rubric_scores"), dict):
+                state["rubric_scores"] = {
+                    k: v
+                    for k, v in state["rubric_scores"].items()
+                    if k != "weighted_average"
+                }
+            state.pop("previous_weighted_avg", None)
             continue
 
 
