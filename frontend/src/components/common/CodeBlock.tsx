@@ -8,22 +8,26 @@ interface CodeBlockProps {
 }
 
 export function CodeBlock({ code, lang = 'text', className = '' }: CodeBlockProps) {
-  const [highlightedHtml, setHighlightedHtml] = useState<string>('');
+  const cacheKey = `${lang}\0${code}`;
+  const [highlighted, setHighlighted] = useState<{ key: string; html: string }>({
+    key: '',
+    html: '',
+  });
+  const highlightedHtml = highlighted.key === cacheKey ? highlighted.html : '';
 
   useEffect(() => {
     let cancelled = false;
-    setHighlightedHtml('');
     highlightCode(code, lang)
       .then((html) => {
-        if (!cancelled) setHighlightedHtml(html);
+        if (!cancelled) setHighlighted({ key: cacheKey, html });
       })
       .catch(() => {
-        if (!cancelled) setHighlightedHtml('');
+        if (!cancelled) setHighlighted({ key: cacheKey, html: '' });
       });
     return () => {
       cancelled = true;
     };
-  }, [code, lang]);
+  }, [cacheKey, code, lang]);
 
   if (highlightedHtml) {
     return (

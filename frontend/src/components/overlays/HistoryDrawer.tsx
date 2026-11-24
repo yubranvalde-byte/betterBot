@@ -35,8 +35,12 @@ const FILTER_OPTIONS = [
   { key: 'SKILL_SUITE', label: 'SUITE' },
 ] as const;
 
-export function HistoryDrawer({
-  isOpen,
+export function HistoryDrawer(props: HistoryDrawerProps) {
+  if (!props.isOpen) return null;
+  return <HistoryDrawerInner {...props} />;
+}
+
+function HistoryDrawerInner({
   onClose,
   sessions,
   activeSessionId,
@@ -58,15 +62,11 @@ export function HistoryDrawer({
   const confirmTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      const t = window.setTimeout(() => {
-        searchInputRef.current?.focus();
-      }, 40);
-      return () => window.clearTimeout(t);
-    }
-    setRenamingId(null);
-    setConfirmDeleteId(null);
-  }, [isOpen]);
+    const t = window.setTimeout(() => {
+      searchInputRef.current?.focus();
+    }, 40);
+    return () => window.clearTimeout(t);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -90,8 +90,6 @@ export function HistoryDrawer({
       return hay.includes(q);
     });
   }, [sessions, filterType, searchQuery]);
-
-  if (!isOpen) return null;
 
   const startRename = (s: SessionSummary) => {
     setRenamingId(s.session_id);

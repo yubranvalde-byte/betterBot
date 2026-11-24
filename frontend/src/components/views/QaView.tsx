@@ -87,8 +87,8 @@ export function QaView({
   const telemetry = session?.model_telemetry || state?.model_telemetry || {};
   const adjTel = telemetry.node_4_adjudicator;
 
-  const championText = session?.clean_champion_prompt || '';
-  const challengerText = session?.clean_challenger_prompt || '';
+  const championText = session?.diff_champion || session?.clean_champion_prompt || '';
+  const challengerText = session?.diff_challenger || session?.clean_challenger_prompt || '';
 
   const diffBundle = useMemo(
     () => buildUnifiedDiff(championText, challengerText, 'Champion', 'Challenger'),

@@ -14,6 +14,7 @@ export type SessionStatus =
 export type NodeId =
   | 'node_1_helper'
   | 'node_2_construct'
+  | 'gate_1_5_linter'
   | 'node_3_upgrader'
   | 'node_4_adjudicator';
 
@@ -134,6 +135,8 @@ export interface SessionData {
   raw_blueprint?: string;
   clean_champion_prompt: string;
   clean_challenger_prompt: string;
+  diff_champion?: string;
+  diff_challenger?: string;
   compilation_check: string;
   chat_history: ChatMessage[];
   timeline: TimelineItem[];

@@ -32,7 +32,7 @@ export function decodeHtmlEntities(input: string | null | undefined): string {
 }
 
 const DECORATIVE_EMOJI_RE =
-  /[\u{1F31F}\u{26A0}\u{2705}\u{1F504}\u{26A1}\u{1F527}\u{1F6E0}\u{1F9E0}\u{2728}\u{1F4CB}\u{1F50D}\u{1F680}\uFE0F]/gu;
+  /(?:[\u{1F31F}\u{26A0}\u{2705}\u{1F504}\u{26A1}\u{1F527}\u{1F6E0}\u{1F9E0}\u{2728}\u{1F4CB}\u{1F50D}\u{1F680}]\uFE0F?)/gu;
 
 export function stripDecorativeEmojis(input: string | null | undefined): string {
   if (!input) return '';

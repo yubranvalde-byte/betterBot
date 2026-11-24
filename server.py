@@ -32,9 +32,6 @@ from main import (
     node_gate_1_5_linter,
     node_helper,
     node_upgrader,
-    route_from_adjudicator,
-    route_from_helper,
-    route_from_linter,
     route_from_start,
 )
 from prompts import BETTY_PROMPT_ADVISOR_PROMPT, BETTY_TECH_SUPPORT_PROMPT
@@ -457,6 +454,8 @@ def create_new_session(
         "parsed_blueprint": {},
         "clean_champion_prompt": "",
         "clean_challenger_prompt": "",
+        "diff_champion": "",
+        "diff_challenger": "",
         "compilation_check": "",
         "chat_history": [
             {
@@ -573,28 +572,54 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
     champ_p = state.get("champion_prompt", "")
     chall_p = state.get("challenger_prompt", "")
     if champ_p:
-        _, parsed_refs = main.parse_compiled_artifacts(champ_p)
-        if parsed_refs:
-            state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
-            session["reference_files"] = state["reference_files"]
+        if "### FILE:" in champ_p:
+            _, parsed_refs = main.parse_compiled_artifacts(champ_p)
+            if parsed_refs:
+                state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
+                session["reference_files"] = state["reference_files"]
         parts = extract_construct_parts(champ_p)
         session["clean_champion_prompt"] = parts["clean_prompt"]
         if parts["compilation_check"]:
             session["compilation_check"] = parts["compilation_check"]
     else:
+        parts = None
         session["clean_champion_prompt"] = ""
 
     if chall_p:
-        _, parsed_refs = main.parse_compiled_artifacts(chall_p)
-        if parsed_refs:
-            state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
-            session["reference_files"] = state["reference_files"]
-        parts = extract_construct_parts(chall_p)
-        session["clean_challenger_prompt"] = parts["clean_prompt"]
-        if parts["compilation_check"]:
-            session["compilation_check"] = parts["compilation_check"]
+        if chall_p == champ_p and parts is not None:
+            chall_parts = parts
+        else:
+            if "### FILE:" in chall_p:
+                _, parsed_refs = main.parse_compiled_artifacts(chall_p)
+                if parsed_refs:
+                    state["reference_files"] = {**parsed_refs, **(state.get("reference_files") or {})}
+                    session["reference_files"] = state["reference_files"]
+            chall_parts = extract_construct_parts(chall_p)
+        session["clean_challenger_prompt"] = chall_parts["clean_prompt"]
+        if chall_parts["compilation_check"]:
+            session["compilation_check"] = chall_parts["compilation_check"]
     else:
         session["clean_challenger_prompt"] = ""
+
+    current_refs = session["reference_files"]
+    prev_snapshot = state.get("previous_artifact_snapshot", "")
+    clean_prev = (
+        extract_construct_parts(prev_snapshot)["clean_prompt"]
+        if prev_snapshot
+        else ""
+    )
+    full_champ = main.format_artifact_with_references(
+        session["clean_champion_prompt"], current_refs
+    ).strip()
+    full_chall = main.format_artifact_with_references(
+        session["clean_challenger_prompt"], current_refs
+    ).strip()
+    if clean_prev:
+        session["diff_champion"] = clean_prev
+        session["diff_challenger"] = full_chall or full_champ
+    else:
+        session["diff_champion"] = full_champ
+        session["diff_challenger"] = full_chall
 
     return session
 
@@ -1175,8 +1200,6 @@ async def stream_factory_execution(
                                 )
                             )
 
-                        next_node = route_from_helper(state)
-
                     elif current_node == "node_2_construct":
                         session["status"] = "compiling"
                         update = await asyncio.to_thread(node_construct, copy.deepcopy(state))
@@ -1196,7 +1219,6 @@ async def stream_factory_execution(
                                 node_tel,
                             )
                         )
-                        next_node = "gate_1_5_linter"
 
                     elif current_node == "node_3_upgrader":
                         session["status"] = "compiling"
@@ -1217,7 +1239,6 @@ async def stream_factory_execution(
                                 node_tel,
                             )
                         )
-                        next_node = "gate_1_5_linter"
 
                     elif current_node == "gate_1_5_linter":
                         session["status"] = "compiling"
@@ -1225,7 +1246,6 @@ async def stream_factory_execution(
                         _apply_node_update(state, update)
                         node_tel = (update.get("model_telemetry") or {}).get("gate_1_5_linter") or {}
                         lint_res = state.get("linter_result") or {}
-                        next_node = route_from_linter(state)
 
                         if lint_res.get("passed"):
                             lint_title = "Gate 1.5 Linter: PASS"
@@ -1261,6 +1281,7 @@ async def stream_factory_execution(
                         _apply_node_update(state, update)
                         node_tel = (update.get("model_telemetry") or {}).get("node_4_adjudicator") or {}
 
+                        new_logs = update.get("error_log") or []
                         last_log = state["error_log"][-1] if state.get("error_log") else ""
                         qa_mode = "Baseline QA" if prev_iter == 0 else f"Regression QA (#{prev_iter})"
 
@@ -1278,7 +1299,7 @@ async def stream_factory_execution(
                                     node_tel,
                                 )
                             )
-                        elif "[FAIL]" in last_log:
+                        elif "[FAIL]" in last_log and "[ESCALATE]" not in last_log:
                             session["timeline"].append(
                                 _attach_timeline_telemetry(
                                     {
@@ -1293,43 +1314,49 @@ async def stream_factory_execution(
                                 )
                             )
                         else:
-                            session["timeline"].append(
-                                _attach_timeline_telemetry(
+                            fail_detail = new_logs[0] if len(new_logs) >= 2 and "[FAIL]" in new_logs[0] else ""
+                            if fail_detail:
+                                session["timeline"].append(
+                                    _attach_timeline_telemetry(
+                                        {
+                                            "id": str(uuid.uuid4())[:8],
+                                            "timestamp": step_time,
+                                            "node": "node_4_adjudicator",
+                                            "title": f"{qa_mode}: FAIL 🔄",
+                                            "detail": fail_detail,
+                                            "status": "warning",
+                                        },
+                                        node_tel,
+                                    )
+                                )
+                                session["timeline"].append(
                                     {
                                         "id": str(uuid.uuid4())[:8],
                                         "timestamp": step_time,
-                                        "node": "node_4_adjudicator",
-                                        "title": f"{qa_mode}: ESCALATE ⚠️",
-                                        "detail": last_log,
+                                        "node": "circuit_breaker",
+                                        "title": "Circuit Breaker הופעל (מקסימום איטרציות)",
+                                        "detail": "נדרשת הכוונה ידנית של המשתמש עבור הסוכן המשדרג.",
                                         "status": "danger",
-                                    },
-                                    node_tel,
+                                    }
                                 )
-                            )
-
-                        next_node = route_from_adjudicator(state)
-                        max_iters = getattr(main, "MAX_QA_ITERATIONS", 2)
-                        # Check if circuit breaker triggered (iteration >= MAX_QA_ITERATIONS on FAIL)
-                        if (
-                            next_node == main.END
-                            and "[FAIL]" in last_log
-                            and state.get("iteration_count", 0) >= max_iters
-                        ):
-                            state["error_log"].append(
-                                f"[ESCALATE] Circuit Breaker triggered after {state['iteration_count']} attempts. {last_log}"
-                            )
-                            session["timeline"].append(
-                                {
-                                    "id": str(uuid.uuid4())[:8],
-                                    "timestamp": step_time,
-                                    "node": "circuit_breaker",
-                                    "title": "Circuit Breaker הופעל (מקסימום איטרציות)",
-                                    "detail": "נדרשת הכוונה ידנית של המשתמש עבור הסוכן המשדרג.",
-                                    "status": "danger",
-                                }
-                            )
+                            else:
+                                session["timeline"].append(
+                                    _attach_timeline_telemetry(
+                                        {
+                                            "id": str(uuid.uuid4())[:8],
+                                            "timestamp": step_time,
+                                            "node": "node_4_adjudicator",
+                                            "title": f"{qa_mode}: ESCALATE ⚠️",
+                                            "detail": last_log,
+                                            "status": "danger",
+                                        },
+                                        node_tel,
+                                    )
+                                )
                     else:
                         break
+
+                    next_node = main.resolve_next_node(current_node, state)
 
                     enrich_session(session)
                     await asyncio.to_thread(save_session_record, owner_id, session_id)

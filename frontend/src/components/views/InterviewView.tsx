@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type FormEvent, type RefObject, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ChartBar,
@@ -107,6 +107,114 @@ function AdjudicatorShieldAvatar() {
     >
       <ShieldCheck size={16} weight="fill" />
     </div>
+  );
+}
+
+interface PrismChatComposerProps {
+  variant: 'hero' | 'docked';
+  draft: string;
+  hasDraftText: boolean;
+  isStreaming: boolean;
+  isOverrideMode: boolean;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
+  onDraftChange: (value: string, el: HTMLTextAreaElement) => void;
+  onSubmit: (e?: FormEvent) => void;
+}
+
+function PrismChatComposer({
+  variant,
+  draft,
+  hasDraftText,
+  isStreaming,
+  isOverrideMode,
+  textareaRef,
+  onDraftChange,
+  onSubmit,
+}: PrismChatComposerProps) {
+  const isHero = variant === 'hero';
+  const placeholder = isOverrideMode
+    ? 'כתוב הנחיית שדרוג או תיקון עבור The Upgrader...'
+    : isHero
+    ? 'תאר את הסוכן או ה-Skill שברצונך לבנות...'
+    : 'תאר את הסוכן או ה-Skill שברצונך לבנות... (Enter לשליחה, Shift+Enter לשורה חדשה)';
+
+  const submitButton = (
+    <button
+      type="submit"
+      disabled={!hasDraftText || isStreaming}
+      className={`h-9 px-4 rounded-xl text-sm font-medium inline-flex items-center gap-1.5 shrink-0 canon-transition ${
+        hasDraftText && !isStreaming
+          ? 'btn-obsidian cursor-pointer'
+          : 'bg-recessed text-muted border border-hairline cursor-not-allowed'
+      }`}
+    >
+      <span>שלח</span>
+      <PaperPlaneTilt size={14} weight="bold" />
+    </button>
+  );
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className={
+        isHero
+          ? 'w-full mt-7 bg-white rounded-2xl border border-[rgba(17,18,22,0.08)] shadow-[0_2px_6px_rgba(17,18,22,0.03),0_12px_32px_-16px_rgba(17,18,22,0.08)] prism-composer overflow-hidden flex flex-col justify-between min-h-[116px]'
+          : 'pointer-events-auto max-w-3xl mx-auto bg-white border border-[rgba(17,18,22,0.08)] rounded-2xl shadow-[0_2px_6px_rgba(17,18,22,0.03),0_12px_32px_-16px_rgba(17,18,22,0.08)] prism-composer overflow-hidden'
+      }
+    >
+      {isOverrideMode && (
+        <div className="bg-amber-tint border-b border-amber/25 px-4 py-2 text-xs text-ink flex items-center gap-2">
+          <Lightning size={14} weight="fill" className="text-amber-600 shrink-0" />
+          <span>
+            <strong>
+              מצב הנחיה ישירה ל-
+              <bdi dir="ltr" className="font-mono">
+                The Upgrader
+              </bdi>
+              :
+            </strong>{' '}
+            כל הוראה שתכתוב תועבר לעריכה אטומית ותיבדק מחדש ב-QA.
+          </span>
+        </div>
+      )}
+
+      <div
+        className={
+          isHero
+            ? 'px-4 pt-3.5 pb-1.5 flex-1 flex'
+            : 'px-3.5 py-2.5 flex items-end gap-2.5'
+        }
+      >
+        <textarea
+          ref={textareaRef}
+          rows={isHero ? 2 : 1}
+          value={draft}
+          onChange={(e) => onDraftChange(e.target.value, e.target)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              onSubmit();
+            }
+          }}
+          placeholder={placeholder}
+          className={
+            isHero
+              ? 'w-full resize-none bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none min-h-[54px] max-h-[160px]'
+              : 'flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm text-ink placeholder:text-muted focus:outline-none min-h-[44px] max-h-[160px]'
+          }
+        />
+        {!isHero && submitButton}
+      </div>
+
+      {isHero && (
+        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
+          <span className="text-[11px] text-muted">
+            Enter לשליחה · Shift+Enter לשורה חדשה
+          </span>
+          {submitButton}
+        </div>
+      )}
+    </form>
   );
 }
 
@@ -281,68 +389,19 @@ export function InterviewView({
             </p>
 
             {/* Centered Solid-White Floating Prism Composer */}
-            <form
+            <PrismChatComposer
+              variant="hero"
+              draft={draft}
+              hasDraftText={hasDraftText}
+              isStreaming={isStreaming}
+              isOverrideMode={isOverrideMode}
+              textareaRef={textareaRef}
+              onDraftChange={(value, el) => {
+                setDraft(value);
+                resizeTextarea(el);
+              }}
               onSubmit={handleSubmit}
-              className="w-full mt-7 bg-white rounded-2xl border border-[rgba(17,18,22,0.08)] shadow-[0_2px_6px_rgba(17,18,22,0.03),0_12px_32px_-16px_rgba(17,18,22,0.08)] prism-composer overflow-hidden flex flex-col justify-between min-h-[116px]"
-            >
-              {isOverrideMode && (
-                <div className="bg-amber-tint border-b border-amber/25 px-4 py-2 text-xs text-ink flex items-center gap-2">
-                  <Lightning size={14} weight="fill" className="text-amber-600 shrink-0" />
-                  <span>
-                    <strong>
-                      מצב הנחיה ישירה ל-
-                      <bdi dir="ltr" className="font-mono">
-                        The Upgrader
-                      </bdi>
-                      :
-                    </strong>{' '}
-                    כל הוראה שתכתוב תועבר לעריכה אטומית ותיבדק מחדש ב-QA.
-                  </span>
-                </div>
-              )}
-
-              <div className="px-4 pt-3.5 pb-1.5 flex-1 flex">
-                <textarea
-                  ref={textareaRef}
-                  rows={2}
-                  value={draft}
-                  onChange={(e) => {
-                    setDraft(e.target.value);
-                    resizeTextarea(e.target);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit();
-                    }
-                  }}
-                  placeholder={
-                    isOverrideMode
-                      ? 'כתוב הנחיית שדרוג או תיקון עבור The Upgrader...'
-                      : 'תאר את הסוכן או ה-Skill שברצונך לבנות...'
-                  }
-                  className="w-full resize-none bg-transparent text-sm text-ink placeholder:text-muted focus:outline-none min-h-[54px] max-h-[160px]"
-                />
-              </div>
-
-              <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
-                <span className="text-[11px] text-muted">
-                  Enter לשליחה · Shift+Enter לשורה חדשה
-                </span>
-                <button
-                  type="submit"
-                  disabled={!hasDraftText || isStreaming}
-                  className={`h-9 px-4 rounded-xl text-sm font-medium inline-flex items-center gap-1.5 shrink-0 canon-transition ${
-                    hasDraftText && !isStreaming
-                      ? 'btn-obsidian cursor-pointer'
-                      : 'bg-recessed text-muted border border-hairline cursor-not-allowed'
-                  }`}
-                >
-                  <span>שלח</span>
-                  <PaperPlaneTilt size={14} weight="bold" />
-                </button>
-              </div>
-            </form>
+            />
 
             {/* Compact Quick-Start Skill Cards (2x2 Grid) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full mt-5">
@@ -669,62 +728,19 @@ export function InterviewView({
 
           {/* Floating Solid-White Prism Chat Composer Docked Over Gentle Bottom Fade */}
           <div className="pointer-events-none sticky bottom-0 z-20 bg-gradient-to-t from-[#F8F9FB] via-[#F8F9FB]/92 to-transparent pt-8 pb-5 px-4 lg:px-8">
-            <form
+            <PrismChatComposer
+              variant="docked"
+              draft={draft}
+              hasDraftText={hasDraftText}
+              isStreaming={isStreaming}
+              isOverrideMode={isOverrideMode}
+              textareaRef={textareaRef}
+              onDraftChange={(value, el) => {
+                setDraft(value);
+                resizeTextarea(el);
+              }}
               onSubmit={handleSubmit}
-              className="pointer-events-auto max-w-3xl mx-auto bg-white border border-[rgba(17,18,22,0.08)] rounded-2xl shadow-[0_2px_6px_rgba(17,18,22,0.03),0_12px_32px_-16px_rgba(17,18,22,0.08)] prism-composer overflow-hidden"
-            >
-              {isOverrideMode && (
-                <div className="bg-amber-tint border-b border-amber/25 px-4 py-2 text-xs text-ink flex items-center gap-2">
-                  <Lightning size={14} weight="fill" className="text-amber-600 shrink-0" />
-                  <span>
-                    <strong>
-                      מצב הנחיה ישירה ל-
-                      <bdi dir="ltr" className="font-mono">
-                        The Upgrader
-                      </bdi>
-                      :
-                    </strong>{' '}
-                    כל הוראה שתכתוב תועבר לעריכה אטומית ותיבדק מחדש ב-QA.
-                  </span>
-                </div>
-              )}
-
-              <div className="px-3.5 py-2.5 flex items-end gap-2.5">
-                <textarea
-                  ref={textareaRef}
-                  rows={1}
-                  value={draft}
-                  onChange={(e) => {
-                    setDraft(e.target.value);
-                    resizeTextarea(e.target);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit();
-                    }
-                  }}
-                  placeholder={
-                    isOverrideMode
-                      ? 'כתוב הנחיית שדרוג או תיקון עבור The Upgrader...'
-                      : 'תאר את הסוכן או ה-Skill שברצונך לבנות... (Enter לשליחה, Shift+Enter לשורה חדשה)'
-                  }
-                  className="flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm text-ink placeholder:text-muted focus:outline-none min-h-[44px] max-h-[160px]"
-                />
-                <button
-                  type="submit"
-                  disabled={!hasDraftText || isStreaming}
-                  className={`h-9 px-4 rounded-xl text-sm font-medium inline-flex items-center gap-1.5 shrink-0 canon-transition ${
-                    hasDraftText && !isStreaming
-                      ? 'btn-obsidian cursor-pointer'
-                      : 'bg-recessed text-muted border border-hairline cursor-not-allowed'
-                  }`}
-                >
-                  <span>שלח</span>
-                  <PaperPlaneTilt size={14} weight="bold" />
-                </button>
-              </div>
-            </form>
+            />
           </div>
         </section>
       )}

@@ -69,12 +69,13 @@ function getStageLabelForNode(nodeId: NodeId, session: SessionData | null): stri
   const stageMap: Record<NodeId, string> = {
     node_1_helper: 'שלב 1/4',
     node_2_construct: 'שלב 2/4',
+    gate_1_5_linter: 'Gate 1.5',
     node_4_adjudicator: 'שלב 3/4',
     node_3_upgrader: 'שלב 4/4',
   };
   const base = stageMap[nodeId] || 'פעיל';
   const iter = session?.state?.iteration_count || 0;
-  return iter > 0 ? `${base} · איטרציה ${iter}/3` : base;
+  return iter > 0 ? `${base} · איטרציה ${iter}/2` : base;
 }
 
 export function App() {
@@ -205,8 +206,13 @@ export function App() {
       if (!loaded) {
         localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
         const list = await refreshSessionsList();
-        if (list.length > 0) {
-          await loadSessionById(list[0].session_id, closeDrawer);
+        const fallback = list.length > 0 ? await getSession(list[0].session_id) : null;
+        if (fallback) {
+          setExecutionBanner(INITIAL_BANNER);
+          setNotifications({});
+          setActiveArtifactFile(resolveActiveArtifactFile(fallback, PRIMARY_FILE_KEY));
+          applySession(fallback);
+          if (closeDrawer) setIsHistoryOpen(false);
         } else {
           const fresh = await createSession();
           setActiveArtifactFile(PRIMARY_FILE_KEY);

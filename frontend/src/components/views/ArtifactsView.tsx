@@ -24,7 +24,13 @@ import {
   Target,
   Warning,
 } from '@phosphor-icons/react';
-import type { ArtifactTab, NodeId, SessionData, ToastTone } from '../../types/api';
+import type {
+  ArtifactTab,
+  NodeId,
+  RubricScores,
+  SessionData,
+  ToastTone,
+} from '../../types/api';
 import {
   buildArtifactTree,
   getActiveArtifactContent,
@@ -40,6 +46,39 @@ import { CodeBlock } from '../common/CodeBlock';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
 import { PrismBar } from '../PrismBar';
 import { Tooltip } from '../Tooltip';
+
+const EMPTY_FOLDERS = new Set<string>();
+const EMPTY_RUBRIC: RubricScores = {};
+
+interface BlueprintDefItem {
+  key: string;
+  label: string;
+  Icon: React.ComponentType<{ size?: number; className?: string }>;
+  full: boolean;
+}
+
+function BlueprintBentoCard({
+  def,
+  value,
+}: {
+  def: BlueprintDefItem;
+  value: string | undefined;
+}) {
+  const Icon = def.Icon;
+  return (
+    <div
+      className={`border border-hairline rounded-md bg-porcelain/60 p-4 ${
+        def.full ? 'md:col-span-2' : ''
+      }`}
+    >
+      <div className="flex items-center gap-2 text-xs font-semibold text-obsidian mb-2">
+        <Icon size={14} className="text-slate-ink shrink-0" />
+        <span>{def.label}</span>
+      </div>
+      <MarkdownRenderer content={decodeHtmlEntities(value)} className="text-sm" />
+    </div>
+  );
+}
 
 interface ArtifactsViewProps {
   session: SessionData | null;
@@ -72,13 +111,17 @@ export function ArtifactsView({
 }: ArtifactsViewProps) {
   const [showRawPrompt, setShowRawPrompt] = useState(false);
   const [overflowOpen, setOverflowOpen] = useState(false);
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(() => new Set());
+  const [collapsedState, setCollapsedState] = useState<{
+    sessionId: string | undefined;
+    folders: Set<string>;
+  }>(() => ({ sessionId: session?.session_id, folders: EMPTY_FOLDERS }));
   const [upgraderInput, setUpgraderInput] = useState('');
   const overflowRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    setCollapsedFolders(new Set());
-  }, [session?.session_id]);
+  const collapsedFolders =
+    collapsedState.sessionId === session?.session_id
+      ? collapsedState.folders
+      : EMPTY_FOLDERS;
 
   useEffect(() => {
     if (!overflowOpen) return;
@@ -107,17 +150,20 @@ export function ArtifactsView({
   const hasPrimaryText = Boolean(bestPrompt.trim());
   const hasAnyArtifact = hasPrimaryText || refKeys.length > 0;
 
-  const resolvedFile = resolveActiveArtifactFile(session, activeFile);
-  const displayedContent = getActiveArtifactContent(session, resolvedFile);
-  const rawContent = getRawArtifactContent(session, resolvedFile);
+  const { resolvedFile, displayedContent, rawContent, parsedFrontmatter } = useMemo(() => {
+    const resolved = resolveActiveArtifactFile(session, activeFile);
+    const displayed = getActiveArtifactContent(session, resolved);
+    return {
+      resolvedFile: resolved,
+      displayedContent: displayed,
+      rawContent: getRawArtifactContent(session, resolved),
+      parsedFrontmatter: parseYamlFrontmatter(displayed),
+    };
+  }, [session, activeFile]);
 
   const tree = useMemo(() => buildArtifactTree(session), [session]);
-  const parsedFrontmatter = useMemo(
-    () => parseYamlFrontmatter(displayedContent),
-    [displayedContent],
-  );
 
-  const rubric = session?.rubric_scores || state?.rubric_scores || {};
+  const rubric = session?.rubric_scores ?? state?.rubric_scores ?? EMPTY_RUBRIC;
   const miniRubricDims = useMemo(() => {
     if (!rubric.used_decision_model) return [];
     const list: Array<{ key: string; label: string; val: number }> = [
@@ -146,6 +192,7 @@ export function ArtifactsView({
   const activeNode = activeStreamingNode || session?.active_node || null;
   const isPromptCompiling =
     activeNode === 'node_2_construct' ||
+    activeNode === 'gate_1_5_linter' ||
     activeNode === 'node_3_upgrader' ||
     activeNode === 'node_4_adjudicator' ||
     session?.status === 'compiling';
@@ -160,11 +207,14 @@ export function ArtifactsView({
   const parsedBp = session?.parsed_blueprint || {};
 
   const toggleFolder = (slug: string) => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
+    const currentSessionId = session?.session_id;
+    setCollapsedState((prev) => {
+      const base =
+        prev.sessionId === currentSessionId ? prev.folders : EMPTY_FOLDERS;
+      const next = new Set(base);
       if (next.has(slug)) next.delete(slug);
       else next.add(slug);
-      return next;
+      return { sessionId: currentSessionId, folders: next };
     });
   };
 
@@ -406,6 +456,8 @@ export function ArtifactsView({
                           <code dir="ltr" className="font-mono text-xs">
                             {activeNode === 'node_4_adjudicator'
                               ? 'The Adjudicator'
+                              : activeNode === 'gate_1_5_linter'
+                              ? 'Gate 1.5 Linter'
                               : activeNode === 'node_3_upgrader'
                               ? 'The Upgrader'
                               : 'The Construct'}
@@ -557,26 +609,13 @@ export function ArtifactsView({
                               {cluster.title}
                             </h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              {visibleDefs.map((def) => {
-                                const Icon = def.Icon;
-                                return (
-                                  <div
-                                    key={def.key}
-                                    className={`border border-hairline rounded-md bg-porcelain/60 p-4 ${
-                                      def.full ? 'md:col-span-2' : ''
-                                    }`}
-                                  >
-                                    <div className="flex items-center gap-2 text-xs font-semibold text-obsidian mb-2">
-                                      <Icon size={14} className="text-slate-ink shrink-0" />
-                                      <span>{def.label}</span>
-                                    </div>
-                                    <MarkdownRenderer
-                                      content={decodeHtmlEntities(parsedBp[def.key])}
-                                      className="text-sm"
-                                    />
-                                  </div>
-                                );
-                              })}
+                              {visibleDefs.map((def) => (
+                                <BlueprintBentoCard
+                                  key={def.key}
+                                  def={def}
+                                  value={parsedBp[def.key]}
+                                />
+                              ))}
                             </div>
                           </div>
                         );
@@ -586,26 +625,13 @@ export function ArtifactsView({
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {v1Defs
                         .filter((d) => Boolean(parsedBp[d.key]))
-                        .map((def) => {
-                          const Icon = def.Icon;
-                          return (
-                            <div
-                              key={def.key}
-                              className={`border border-hairline rounded-md bg-porcelain/60 p-4 ${
-                                def.full ? 'md:col-span-2' : ''
-                              }`}
-                            >
-                              <div className="flex items-center gap-2 text-xs font-semibold text-obsidian mb-2">
-                                <Icon size={14} className="text-slate-ink shrink-0" />
-                                <span>{def.label}</span>
-                              </div>
-                              <MarkdownRenderer
-                                content={decodeHtmlEntities(parsedBp[def.key])}
-                                className="text-sm"
-                              />
-                            </div>
-                          );
-                        })}
+                        .map((def) => (
+                          <BlueprintBentoCard
+                            key={def.key}
+                            def={def}
+                            value={parsedBp[def.key]}
+                          />
+                        ))}
                     </div>
                   )}
 

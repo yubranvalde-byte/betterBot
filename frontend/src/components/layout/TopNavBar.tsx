@@ -71,6 +71,9 @@ export function TopNavBar({
       if (activeStreamingNode === 'node_2_construct') {
         return { text: 'NEON · COMPILING', tone: 'active' as const };
       }
+      if (activeStreamingNode === 'gate_1_5_linter') {
+        return { text: 'GATE 1.5 · LINTING', tone: 'active' as const };
+      }
       if (activeStreamingNode === 'node_3_upgrader') {
         return { text: 'UPGRADER · PATCHING', tone: 'amber' as const };
       }
@@ -105,7 +108,9 @@ export function TopNavBar({
       : 'ambient',
     // 02 -> 03
     isStreaming &&
-    (activeStreamingNode === 'node_3_upgrader' || activeStreamingNode === 'node_4_adjudicator')
+    (activeStreamingNode === 'gate_1_5_linter' ||
+      activeStreamingNode === 'node_3_upgrader' ||
+      activeStreamingNode === 'node_4_adjudicator')
       ? 'active'
       : qaCount > 0
       ? 'completed'

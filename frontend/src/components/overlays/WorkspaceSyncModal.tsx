@@ -25,8 +25,12 @@ interface WorkspaceSyncModalProps {
   onCopyWorkspaceId: () => void;
 }
 
-export function WorkspaceSyncModal({
-  isOpen,
+export function WorkspaceSyncModal(props: WorkspaceSyncModalProps) {
+  if (!props.isOpen) return null;
+  return <WorkspaceSyncModalInner {...props} />;
+}
+
+function WorkspaceSyncModalInner({
   onClose,
   workspaceId,
   isMasterMode,
@@ -46,17 +50,11 @@ export function WorkspaceSyncModal({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (isOpen) {
-      setKeyInput('');
-      setFeedback(null);
-      if (!isMasterMode) {
-        const t = window.setTimeout(() => inputRef.current?.focus(), 40);
-        return () => window.clearTimeout(t);
-      }
+    if (!isMasterMode) {
+      const t = window.setTimeout(() => inputRef.current?.focus(), 40);
+      return () => window.clearTimeout(t);
     }
-  }, [isOpen, isMasterMode]);
-
-  if (!isOpen) return null;
+  }, [isMasterMode]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

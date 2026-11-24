@@ -72,6 +72,7 @@ class FactoryState(TypedDict, total=False):
     is_manual_override: Annotated[bool, replace_value]
     linter_retries: Annotated[int, replace_value]
     linter_result: Annotated[Dict[str, Any], replace_value]
+    previous_artifact_snapshot: Annotated[str, replace_value]
     model_telemetry: Annotated[Dict[str, Any], merge_dicts]
     model_overrides: Annotated[Dict[str, str], replace_value]
 
@@ -1192,6 +1193,7 @@ def node_upgrader(state: FactoryState):
     update: Dict[str, Any] = {
         "challenger_xml": response.updated_xml,
         "challenger_prompt": primary_prompt,
+        "previous_artifact_snapshot": champion_prompt,
         "target_type": meta["target_type"],
         "needs_scripts": updated_needs_scripts,
         "is_repo_context": is_repo_context
@@ -1511,7 +1513,13 @@ def node_adjudicator(state: FactoryState):
             f"[{decision.status}] Reason: {decision.reason} | "
             f"Directive: {decision.correction_directive}"
         )
-        state_update["error_log"] = [formatted_message]
+        if decision.status == "FAIL" and (iteration_count + 1) >= MAX_QA_ITERATIONS:
+            state_update["error_log"] = [
+                formatted_message,
+                f"[ESCALATE] Circuit Breaker triggered after {iteration_count + 1} attempts. {formatted_message}",
+            ]
+        else:
+            state_update["error_log"] = [formatted_message]
 
     return state_update
 
@@ -1625,6 +1633,19 @@ def route_from_adjudicator(state: FactoryState):
     return END
 
 
+def resolve_next_node(current_node: str, state: FactoryState) -> str:
+    """Canonical single source of truth for intra-graph node transitions."""
+    if current_node == "node_1_helper":
+        return route_from_helper(state)
+    if current_node in ("node_2_construct", "node_3_upgrader"):
+        return "gate_1_5_linter"
+    if current_node == "gate_1_5_linter":
+        return route_from_linter(state)
+    if current_node == "node_4_adjudicator":
+        return route_from_adjudicator(state)
+    return END
+
+
 builder = StateGraph(FactoryState)
 
 # 1. Add Nodes
@@ -1663,6 +1684,7 @@ def make_initial_state(user_input: str = "") -> FactoryState:
         "iteration_count": 0,
         "linter_retries": 0,
         "linter_result": {},
+        "previous_artifact_snapshot": "",
         "target_type": "SYSTEM_PROMPT",
         "slug_name": "",
         "needs_scripts": False,

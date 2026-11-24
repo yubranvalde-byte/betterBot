@@ -15,8 +15,11 @@ import type {
   HealthRoutingNode,
   NodeId,
   SessionData,
+  TimelineItem,
   ViewId,
 } from '../../types/api';
+
+const EMPTY_TIMELINE: TimelineItem[] = [];
 import { getBestPrompt } from '../../utils/artifacts';
 import { formatModelBadgeText, stripDecorativeEmojis } from '../../utils/text';
 import {
@@ -114,7 +117,7 @@ export function TopologyView({
     getBestPrompt(session).trim() || Object.keys(refFiles).length > 0,
   );
   const telemetry = session?.model_telemetry || state?.model_telemetry || {};
-  const timeline = session?.timeline || [];
+  const timeline = session?.timeline ?? EMPTY_TIMELINE;
 
   const filteredTimeline = useMemo(() => {
     const reversed = timeline.slice().reverse();
@@ -173,7 +176,9 @@ export function TopologyView({
       : 'ambient';
 
   const conduit24State: ConduitState =
-    activeNodeId === 'node_2_construct' || activeNodeId === 'node_4_adjudicator'
+    activeNodeId === 'node_2_construct' ||
+    activeNodeId === 'gate_1_5_linter' ||
+    activeNodeId === 'node_4_adjudicator'
       ? 'active'
       : hasPrompt && (status === 'passed' || iter > 0)
       ? 'completed'
@@ -240,7 +245,7 @@ export function TopologyView({
                 Circuit Breaker
               </span>
               <div className="flex items-center gap-1" dir="ltr">
-                {[1, 2, 3].map((step) => {
+                {[1, 2].map((step) => {
                   const used = step <= iter;
                   const tripped = status === 'escalated' && used;
                   return (
@@ -261,7 +266,7 @@ export function TopologyView({
                 className="font-mono text-xs tabular-nums font-semibold text-obsidian"
                 dir="ltr"
               >
-                {iter}/3
+                {iter}/2
               </span>
             </div>
           </div>
@@ -298,7 +303,9 @@ export function TopologyView({
                   index === 0
                     ? '<ARTIFACT_BLUEPRINT>'
                     : index === 1
-                    ? 'Challenger'
+                    ? activeNodeId === 'gate_1_5_linter'
+                      ? 'Gate 1.5 Linter'
+                      : 'Challenger'
                     : 'Gate 2';
 
                 return (
