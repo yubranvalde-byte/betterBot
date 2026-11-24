@@ -5,7 +5,7 @@
 ## 1. Git & Deployment Policy (Strict)
 
 - **Active branch only:** Work exclusively on `develop`. Verify `git branch --show-current` is `develop` before editing or committing.
-- **Protected production branch:** NEVER commit to, merge into, rebase onto, or modify `main` (reserved for Live Production on Render via `render.yaml`).
+- **Protected production branch:** Agents are NOT allowed to commit to, merge into, rebase onto, push to, or modify `main` UNLESS explicitly ordered by the user (reserved for Live Production on Render via `render.yaml`).
 - **Frontend builds:** Never hand-edit compiled bundles under `static/assets/*` or `static/index.html`; edit `frontend/src/*` and rebuild via Vite (`npm run build` in `frontend/`).
 
 ## 2. Directory-as-Router Map
