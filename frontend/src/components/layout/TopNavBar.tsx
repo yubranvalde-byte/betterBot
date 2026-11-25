@@ -1,6 +1,6 @@
 import { CaretDown, ClockCounterClockwise, Key, Plus } from '@phosphor-icons/react';
 import { motion } from 'motion/react';
-import type { NodeId, SessionData, ViewId } from '../../types/api';
+import type { EffortTier, NodeId, SessionData, ViewId } from '../../types/api';
 import { getBestPrompt } from '../../utils/artifacts';
 import { decodeHtmlEntities } from '../../utils/text';
 import { MicroConduitConnector, type ConduitState } from '../OpticalConduit';
@@ -14,6 +14,7 @@ interface TopNavBarProps {
   isStreaming: boolean;
   activeStreamingNode: NodeId | null;
   isMasterMode: boolean;
+  effortTier: EffortTier;
   isBettyOpen: boolean;
   isHistoryOpen: boolean;
   notifications: Partial<Record<ViewId, 'info' | 'pass' | 'escalate'>>;
@@ -38,6 +39,7 @@ export function TopNavBar({
   isStreaming,
   activeStreamingNode,
   isMasterMode,
+  effortTier,
   isBettyOpen,
   isHistoryOpen,
   notifications,
@@ -61,6 +63,21 @@ export function TopNavBar({
   const weightedPct = rubric.used_decision_model
     ? Math.round(Number(rubric.weighted_average || 0) * 100)
     : null;
+  const telemetry = currentSession?.model_telemetry || currentSession?.state?.model_telemetry || {};
+  const activeTier: EffortTier =
+    effortTier ||
+    currentSession?.effort_tier ||
+    currentSession?.state?.effort_tier ||
+    telemetry.last_execution?.effort_tier ||
+    'medium';
+  const tierBadgeLabel =
+    activeTier === 'low'
+      ? 'LOW'
+      : activeTier === 'high'
+      ? 'HIGH'
+      : activeTier === 'overkill'
+      ? '🔥 OVERKILL'
+      : 'MED';
 
   // Live Telemetry Conduit Pill label & tone
   const telemetryPill = (() => {
@@ -79,6 +96,9 @@ export function TopNavBar({
       }
       if (activeStreamingNode === 'node_4_adjudicator') {
         return { text: 'ADJUDICATOR · QA', tone: 'active' as const };
+      }
+      if (activeStreamingNode === 'node_red_team_auto') {
+        return { text: 'RED-TEAM · AUDIT', tone: 'amber' as const };
       }
       return { text: 'PIPELINE · RUNNING', tone: 'active' as const };
     }
@@ -248,6 +268,18 @@ export function TopNavBar({
               aria-hidden="true"
             />
             <span>{telemetryPill.text}</span>
+            <span className="text-muted/60">·</span>
+            <span
+              className={`font-semibold ${
+                activeTier === 'overkill'
+                  ? 'text-amber'
+                  : activeTier === 'high'
+                  ? 'text-obsidian'
+                  : 'text-slate-ink'
+              }`}
+            >
+              {tierBadgeLabel}
+            </span>
           </div>
 
           <Tooltip content="בחירת סשן וספריית היסטוריית יצירות" placement="bottom">

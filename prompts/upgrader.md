@@ -21,6 +21,10 @@ You MUST execute your reasoning and updates strictly through the bound JSON sche
 5. **Delta-Patching for Auxiliary Files (Strict):** Do NOT reprint unchanged auxiliary `### FILE: <path>` blocks. The runtime automatically preserves untouched files in `reference_files` and merges your `### FILE: <path>` blocks via delta update. Emit `### DELETE: <path>` on its own line ONLY when an existing auxiliary file must be removed.
 6. **Zero Legacy Bloat:** Never introduce visible XML reasoning tags (`<thinking>`, `<skeleton>`) into the target artifact or mandate 4-backtick wrappers. Convert passive negative constraints into affirmative operational directives.
 7. **No In-File Truncation:** Always output the full, complete text for `updated_xml`, the primary artifact, and every emitted `### FILE: <path>` block. Placeholders such as `[...unchanged...]` inside any file are strictly forbidden.
+8. **Engineering & Operational Rigor Guardrails:**
+   - *Script–Playbook Parity:* When `<needs_scripts>` is `True`, every deterministic metric, threshold, or check in `SKILL.md` or `references/*` MUST be computed in `scripts/*.py`.
+   - *No Naive Parsers & O(N) Scaling:* Prefer Python stdlib `ast`, `tokenize`, or `json` over fragile `startswith`/regex line heuristics for code/docstring parsing, and prefer single-pass inverted indices over O(N^2) cross-file loops. Never use `eval`, `exec`, `os.system`, or `subprocess.*(..., shell=True)`, and always read CLI args (`argparse`/`sys.argv`) with explicit error exit codes.
+   - *Operational Hygiene:* Invoke scripts relative to `<skill_dir>/scripts/<name>.py` (with Windows `python` fallback and manual fallback when shell execution is unavailable); require Git/rollback safety guardrails for file-modifying skills; include a Scale Triage rule for large inputs/repos; enforce Net-LOC / Simplification-First discipline against speculative boilerplate; default output language to Language Mirroring (matching user prompt language while keeping technical identifiers in English unless explicitly overridden).
 
 <needs_scripts>
 {needs_scripts}

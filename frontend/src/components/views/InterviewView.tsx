@@ -15,6 +15,8 @@ import {
 } from '@phosphor-icons/react';
 import type {
   ArtifactTab,
+  ContextAttachment,
+  EffortTier,
   NodeId,
   SessionData,
   ToastTone,
@@ -22,15 +24,24 @@ import type {
 } from '../../types/api';
 import { getBestPrompt } from '../../utils/artifacts';
 import { decodeHtmlEntities, stripDecorativeEmojis } from '../../utils/text';
+import { AttachmentBar } from '../common/AttachmentBar';
+import { EffortTierSelector } from '../common/EffortTierSelector';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
 import { PrismBar } from '../PrismBar';
 
 interface InterviewViewProps {
   session: SessionData | null;
   isStreaming: boolean;
+  isUploadingAttachment: boolean;
   activeStreamingNode: NodeId | null;
   activeStreamingDesc: string;
   pendingUserMessage: string | null;
+  effortTier: EffortTier;
+  isMasterMode: boolean;
+  onChangeEffortTier: (tier: EffortTier) => void;
+  onRequestMasterUnlock: () => void;
+  onUploadAttachment: (file: File) => void;
+  onDeleteAttachment: (attachmentId: string) => void;
   onSendMessage: (message: string) => void;
   onNavigateView: (view: ViewId, artifactTab?: ArtifactTab) => void;
   onShowToast?: (message: string, tone?: ToastTone) => void;
@@ -115,7 +126,16 @@ interface PrismChatComposerProps {
   draft: string;
   hasDraftText: boolean;
   isStreaming: boolean;
+  isUploadingAttachment: boolean;
   isOverrideMode: boolean;
+  attachments: ContextAttachment[];
+  effortTier: EffortTier;
+  isMasterMode: boolean;
+  onChangeEffortTier: (tier: EffortTier) => void;
+  onRequestMasterUnlock: () => void;
+  onUploadAttachment: (file: File) => void;
+  onDeleteAttachment: (attachmentId: string) => void;
+  onValidationError?: (msg: string) => void;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
   onDraftChange: (value: string, el: HTMLTextAreaElement) => void;
   onSubmit: (e?: FormEvent) => void;
@@ -126,7 +146,16 @@ function PrismChatComposer({
   draft,
   hasDraftText,
   isStreaming,
+  isUploadingAttachment,
   isOverrideMode,
+  attachments,
+  effortTier,
+  isMasterMode,
+  onChangeEffortTier,
+  onRequestMasterUnlock,
+  onUploadAttachment,
+  onDeleteAttachment,
+  onValidationError,
   textareaRef,
   onDraftChange,
   onSubmit,
@@ -206,12 +235,47 @@ function PrismChatComposer({
         {!isHero && submitButton}
       </div>
 
-      {isHero && (
-        <div className="px-4 pb-3 pt-1 flex items-center justify-between gap-3">
-          <span className="text-[11px] text-muted">
-            Enter לשליחה · Shift+Enter לשורה חדשה
+      <div className="px-3.5 pb-2">
+        <AttachmentBar
+          attachments={attachments}
+          isUploading={isUploadingAttachment}
+          disabled={isStreaming}
+          compact={!isHero}
+          onUploadFile={onUploadAttachment}
+          onDeleteAttachment={onDeleteAttachment}
+          onValidationError={onValidationError}
+        />
+      </div>
+
+      {isHero ? (
+        <div className="px-4 pb-3 pt-1.5 flex flex-wrap items-center justify-between gap-2.5 border-t border-hairline/60 bg-porcelain/40">
+          <EffortTierSelector
+            value={effortTier}
+            isMasterMode={isMasterMode}
+            disabled={isStreaming}
+            onChange={onChangeEffortTier}
+            onRequestMasterUnlock={onRequestMasterUnlock}
+          />
+          <div className="flex items-center gap-3 mr-auto">
+            <span className="hidden sm:inline text-[11px] text-muted">
+              Enter לשליחה · Shift+Enter לשורה חדשה
+            </span>
+            {submitButton}
+          </div>
+        </div>
+      ) : (
+        <div className="px-3.5 pb-2.5 pt-1.5 border-t border-hairline/60 bg-porcelain/40 flex flex-wrap items-center justify-between gap-2">
+          <EffortTierSelector
+            value={effortTier}
+            isMasterMode={isMasterMode}
+            disabled={isStreaming}
+            compact
+            onChange={onChangeEffortTier}
+            onRequestMasterUnlock={onRequestMasterUnlock}
+          />
+          <span className="hidden sm:inline text-[11px] text-muted">
+            רמת מאמץ וחשיבה פעילה
           </span>
-          {submitButton}
         </div>
       )}
     </form>
@@ -221,11 +285,19 @@ function PrismChatComposer({
 export function InterviewView({
   session,
   isStreaming,
+  isUploadingAttachment,
   activeStreamingNode,
   activeStreamingDesc,
   pendingUserMessage,
+  effortTier,
+  isMasterMode,
+  onChangeEffortTier,
+  onRequestMasterUnlock,
+  onUploadAttachment,
+  onDeleteAttachment,
   onSendMessage,
   onNavigateView,
+  onShowToast,
 }: InterviewViewProps) {
   const [draft, setDraft] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -233,6 +305,7 @@ export function InterviewView({
 
   const history = session?.chat_history || [];
   const state = session?.state;
+  const attachments = session?.context_attachments ?? state?.context_attachments ?? [];
   const status = session?.status || 'idle';
   const iterationCount = state?.iteration_count || 0;
   const isOverrideMode =
@@ -394,7 +467,16 @@ export function InterviewView({
               draft={draft}
               hasDraftText={hasDraftText}
               isStreaming={isStreaming}
+              isUploadingAttachment={isUploadingAttachment}
               isOverrideMode={isOverrideMode}
+              attachments={attachments}
+              effortTier={effortTier}
+              isMasterMode={isMasterMode}
+              onChangeEffortTier={onChangeEffortTier}
+              onRequestMasterUnlock={onRequestMasterUnlock}
+              onUploadAttachment={onUploadAttachment}
+              onDeleteAttachment={onDeleteAttachment}
+              onValidationError={(msg) => onShowToast?.(msg, 'alert')}
               textareaRef={textareaRef}
               onDraftChange={(value, el) => {
                 setDraft(value);
@@ -733,7 +815,16 @@ export function InterviewView({
               draft={draft}
               hasDraftText={hasDraftText}
               isStreaming={isStreaming}
+              isUploadingAttachment={isUploadingAttachment}
               isOverrideMode={isOverrideMode}
+              attachments={attachments}
+              effortTier={effortTier}
+              isMasterMode={isMasterMode}
+              onChangeEffortTier={onChangeEffortTier}
+              onRequestMasterUnlock={onRequestMasterUnlock}
+              onUploadAttachment={onUploadAttachment}
+              onDeleteAttachment={onDeleteAttachment}
+              onValidationError={(msg) => onShowToast?.(msg, 'alert')}
               textareaRef={textareaRef}
               onDraftChange={(value, el) => {
                 setDraft(value);

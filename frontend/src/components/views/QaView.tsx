@@ -1,17 +1,22 @@
 import { useMemo, useState } from 'react';
 import {
   CheckCircle,
+  CircleNotch,
   GitDiff,
   Lightning,
   PaperPlaneTilt,
   PencilSimple,
   ShieldCheck,
+  Sword,
   Warning,
   XCircle,
 } from '@phosphor-icons/react';
-import type { DiffMode, SessionData } from '../../types/api';
+import type { DiffMode, EffortTier, RubricScores, SessionData, ToastTone } from '../../types/api';
 import { buildUnifiedDiff, renderDiffHtml } from '../../utils/diff';
+import { AttachmentBar } from '../common/AttachmentBar';
+import { EffortTierSelector } from '../common/EffortTierSelector';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
+import { RedTeamPanel } from '../common/RedTeamPanel';
 import { PrismBar } from '../PrismBar';
 
 interface QaViewProps {
@@ -19,7 +24,75 @@ interface QaViewProps {
   diffMode: DiffMode;
   onChangeDiffMode: (mode: DiffMode) => void;
   isStreaming: boolean;
+  isRedTeaming: boolean;
+  isUploadingAttachment: boolean;
+  effortTier: EffortTier;
+  isMasterMode: boolean;
+  onChangeEffortTier: (tier: EffortTier) => void;
+  onRequestMasterUnlock: () => void;
+  onUploadAttachment: (file: File) => void;
+  onDeleteAttachment: (attachmentId: string) => void;
   onRunUpgrader: (directive: string) => void;
+  onRunRedTeam: () => void;
+  onShowToast?: (message: string, tone?: ToastTone) => void;
+}
+
+const RUBRIC_META_KEYS = new Set([
+  'used_decision_model',
+  'challenger_beats_champion',
+  'weighted_average',
+]);
+
+const EMPTY_RUBRIC: RubricScores = {};
+
+interface DimensionMeta {
+  label: string;
+  badge?: string;
+  warnBelow?: number;
+}
+
+const KNOWN_DIMENSION_ORDER = [
+  'trigger_precision',
+  'token_density_no_bloat',
+  'intent_alignment',
+  'output_contract_strength',
+  'actionable_clarity',
+  'progressive_disclosure',
+  'operational_resilience',
+  'script_rigor_and_parity',
+  'trigger_deconfliction',
+] as const;
+
+const KNOWN_DIMENSION_META: Record<string, DimensionMeta> = {
+  trigger_precision: { label: 'Trigger Precision' },
+  token_density_no_bloat: { label: 'Token Density' },
+  intent_alignment: { label: 'Intent Alignment' },
+  output_contract_strength: { label: 'Output Contract' },
+  actionable_clarity: { label: 'Actionable Clarity' },
+  progressive_disclosure: { label: 'Progressive Disclosure' },
+  operational_resilience: { label: 'Operational Resilience' },
+  script_rigor_and_parity: { label: 'Script Rigor & Parity', badge: 'SCRIPTS', warnBelow: 4.0 },
+  trigger_deconfliction: { label: 'Trigger De-confliction', badge: 'SKILL_SUITE' },
+};
+
+const BASE_DIMENSION_KEYS = new Set<string>([
+  'trigger_precision',
+  'token_density_no_bloat',
+  'intent_alignment',
+  'output_contract_strength',
+  'actionable_clarity',
+  'progressive_disclosure',
+]);
+
+function formatDimensionLabel(key: string): string {
+  return (
+    KNOWN_DIMENSION_META[key]?.label ??
+    key
+      .split('_')
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  );
 }
 
 interface ParsedQaEntry {
@@ -75,7 +148,17 @@ export function QaView({
   diffMode,
   onChangeDiffMode,
   isStreaming,
+  isRedTeaming,
+  isUploadingAttachment,
+  effortTier,
+  isMasterMode,
+  onChangeEffortTier,
+  onRequestMasterUnlock,
+  onUploadAttachment,
+  onDeleteAttachment,
   onRunUpgrader,
+  onRunRedTeam,
+  onShowToast,
 }: QaViewProps) {
   const [qaInput, setQaInput] = useState('');
 
@@ -83,7 +166,7 @@ export function QaView({
   const logs = state?.error_log || [];
   const iterationCount = state?.iteration_count || 0;
   const status = session?.status || 'idle';
-  const rubric = session?.rubric_scores || state?.rubric_scores || {};
+  const rubric = session?.rubric_scores ?? state?.rubric_scores ?? EMPTY_RUBRIC;
   const telemetry = session?.model_telemetry || state?.model_telemetry || {};
   const adjTel = telemetry.node_4_adjudicator;
 
@@ -101,27 +184,32 @@ export function QaView({
   );
 
   const dims = useMemo(() => {
-    const base = [
-      { key: 'trigger_precision', label: 'Trigger Precision', isSuite: false },
-      { key: 'token_density_no_bloat', label: 'Token Density', isSuite: false },
-      { key: 'intent_alignment', label: 'Intent Alignment', isSuite: false },
-      { key: 'output_contract_strength', label: 'Output Contract', isSuite: false },
-      { key: 'actionable_clarity', label: 'Actionable Clarity', isSuite: false },
-      { key: 'progressive_disclosure', label: 'Progressive Disclosure', isSuite: false },
-    ] as const;
+    const entries: Array<{ key: string; label: string; badge?: string; warnBelow: number }> = [];
+    const seen = new Set<string>();
 
-    const list: Array<{ key: keyof typeof rubric; label: string; isSuite: boolean }> = [
-      ...base,
-    ];
-    if (rubric.trigger_deconfliction !== undefined && rubric.trigger_deconfliction !== null) {
-      list.push({
-        key: 'trigger_deconfliction',
-        label: 'Trigger De-confliction',
-        isSuite: true,
+    const pushKey = (key: string) => {
+      if (seen.has(key) || RUBRIC_META_KEYS.has(key)) return;
+      const val = rubric[key];
+      const hasScore = typeof val === 'number' && Number.isFinite(val);
+      if (!hasScore && !BASE_DIMENSION_KEYS.has(key)) return;
+      seen.add(key);
+      const meta = KNOWN_DIMENSION_META[key];
+      entries.push({
+        key,
+        label: formatDimensionLabel(key),
+        badge: meta?.badge,
+        warnBelow: meta?.warnBelow ?? 3.0,
       });
+    };
+
+    for (const key of KNOWN_DIMENSION_ORDER) {
+      pushKey(key);
     }
-    return list;
-  }, [rubric.trigger_deconfliction]);
+    for (const key of Object.keys(rubric)) {
+      pushKey(key);
+    }
+    return entries;
+  }, [rubric]);
 
   const weightedPct = Math.round(Number(rubric.weighted_average || 0) * 100);
   const beatsChamp = Number(rubric.challenger_beats_champion ?? 1);
@@ -151,6 +239,13 @@ export function QaView({
   })();
 
   const canUpgradeFromQa = status === 'escalated' || iterationCount > 0;
+  const hasCompiledArtifact = Boolean(
+    (session?.clean_champion_prompt || session?.clean_challenger_prompt || '').trim() ||
+      Object.keys(session?.reference_files || state?.reference_files || {}).length > 0,
+  );
+  const canRunRedTeam =
+    hasCompiledArtifact && (status === 'passed' || status === 'escalated');
+  const redTeamReport = session?.red_team_report ?? state?.red_team_report ?? null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -247,7 +342,7 @@ export function QaView({
               )}
             </div>
 
-            {/* 6/7-Dimension Rubric Table with Unified Signature PrismBar */}
+            {/* Dynamic Rubric Table with Unified Signature PrismBar */}
             {rubric.used_decision_model && (
               <div className="mt-6 border-t border-hairline pt-2">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-10">
@@ -262,9 +357,9 @@ export function QaView({
                         >
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="text-xs font-medium text-obsidian">{dim.label}</span>
-                            {dim.isSuite && (
+                            {dim.badge && (
                               <span className="font-mono text-[10px] px-1.5 py-0.5 rounded-sm border border-hairline bg-recessed text-obsidian">
-                                SKILL_SUITE
+                                {dim.badge}
                               </span>
                             )}
                           </div>
@@ -272,14 +367,43 @@ export function QaView({
                             {rawVal.toFixed(1)} / 5
                           </span>
                         </div>
-                        <PrismBar value={pct} variant={rawVal < 3.0 ? 'warning' : 'prism'} />
+                        <PrismBar value={pct} variant={rawVal < dim.warnBelow ? 'warning' : 'prism'} />
                       </div>
                     );
                   })}
                 </div>
               </div>
             )}
+
+            {canRunRedTeam && (
+              <div className="mt-4 pt-4 border-t border-hairline flex items-center justify-between gap-3 flex-wrap">
+                <span className="text-xs text-slate-ink">
+                  בדיקת עמידות אדוורסרית עצמאית (ללא Generator Bias)
+                </span>
+                <button
+                  type="button"
+                  disabled={isStreaming || isRedTeaming}
+                  onClick={onRunRedTeam}
+                  className="prism-interactive h-8 px-3 rounded-md border border-hairline bg-white/80 backdrop-blur-md disabled:opacity-45 text-xs font-medium text-obsidian inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  {isRedTeaming ? (
+                    <CircleNotch size={14} className="animate-spin text-amber" />
+                  ) : (
+                    <Sword size={14} weight="bold" className="text-amber" />
+                  )}
+                  <span>⚔️ Red-Team</span>
+                </button>
+              </div>
+            )}
           </section>
+
+          {redTeamReport && (
+            <RedTeamPanel
+              report={redTeamReport}
+              isStreaming={isStreaming}
+              onHarden={onRunUpgrader}
+            />
+          )}
 
           {/* QA History & Manual Override Audit Log */}
           <section className="card-porcelain rounded-[14px] overflow-hidden">
@@ -422,30 +546,49 @@ export function QaView({
 
       {/* Bottom QA Upgrader Command Bar */}
       {canUpgradeFromQa && (
-        <form
-          onSubmit={handleSubmit}
-          className="border-t border-hairline bg-surface px-6 lg:px-8 py-3 flex flex-wrap sm:flex-nowrap items-center gap-2.5"
-        >
-          <div className="flex items-center gap-1.5 text-xs text-slate-ink shrink-0">
-            <PencilSimple size={14} className="text-amber" />
-            <span>תיקון ישיר ממעבדת ה-QA:</span>
-          </div>
-          <input
-            type="text"
-            value={qaInput}
-            onChange={(e) => setQaInput(e.target.value)}
-            placeholder="שלח הוראת תיקון או שדרוג אטומי בעקבות ממצאי ה-QA..."
-            className="flex-1 min-w-[200px] h-9 rounded-md border border-hairline-strong bg-porcelain px-3 text-xs text-ink placeholder:text-muted focus:border-obsidian focus:bg-surface focus:outline-none"
+        <div className="border-t border-hairline bg-surface px-6 lg:px-8 py-2.5 space-y-2">
+          <AttachmentBar
+            attachments={session?.context_attachments ?? state?.context_attachments ?? []}
+            isUploading={isUploadingAttachment}
+            disabled={isStreaming}
+            compact
+            onUploadFile={onUploadAttachment}
+            onDeleteAttachment={onDeleteAttachment}
+            onValidationError={(msg) => onShowToast?.(msg, 'alert')}
           />
-          <button
-            type="submit"
-            disabled={!qaInput.trim() || isStreaming}
-            className="btn-obsidian h-9 px-3.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+          <form
+            onSubmit={handleSubmit}
+            className="flex flex-wrap items-center gap-2.5"
           >
-            <span>שדרג ובדוק מחדש ב-QA</span>
-            <PaperPlaneTilt size={13} weight="bold" />
-          </button>
-        </form>
+            <div className="flex items-center gap-1.5 text-xs text-slate-ink shrink-0">
+              <PencilSimple size={14} className="text-amber" />
+              <span>תיקון ישיר ממעבדת ה-QA:</span>
+            </div>
+            <EffortTierSelector
+              value={effortTier}
+              isMasterMode={isMasterMode}
+              disabled={isStreaming}
+              compact
+              onChange={onChangeEffortTier}
+              onRequestMasterUnlock={onRequestMasterUnlock}
+            />
+            <input
+              type="text"
+              value={qaInput}
+              onChange={(e) => setQaInput(e.target.value)}
+              placeholder="שלח הוראת תיקון או שדרוג אטומי בעקבות ממצאי ה-QA..."
+              className="flex-1 min-w-[200px] h-9 rounded-md border border-hairline-strong bg-porcelain px-3 text-xs text-ink placeholder:text-muted focus:border-obsidian focus:bg-surface focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!qaInput.trim() || isStreaming}
+              className="btn-obsidian h-9 px-3.5 rounded-md text-xs font-medium inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+            >
+              <span>שדרג ובדוק מחדש ב-QA</span>
+              <PaperPlaneTilt size={13} weight="bold" />
+            </button>
+          </form>
+        </div>
       )}
     </div>
   );

@@ -1,3 +1,5 @@
+import base64
+from datetime import datetime, timezone
 import json
 import operator
 import os
@@ -5,9 +7,11 @@ import re
 import threading
 import time
 from typing import Annotated, Any, Dict, List, Optional, Tuple, TypedDict
+import uuid
 
 import requests
 from dotenv import load_dotenv
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
@@ -16,9 +20,11 @@ from pydantic import BaseModel, Field
 from prompts import (
     ADJUDICATOR_BASELINE_PROMPT,
     ADJUDICATOR_REGRESSION_PROMPT,
+    ATTACHMENT_DIGEST_PROMPT,
     CONSTRUCT_PROMPT,
     HELPER_PROMPT,
     HELPER_READINESS_QUESTIONS,
+    RED_TEAM_PROMPT,
     UPGRADER_PROMPT,
     get_rubric_questions,
 )
@@ -75,6 +81,10 @@ class FactoryState(TypedDict, total=False):
     previous_artifact_snapshot: Annotated[str, replace_value]
     model_telemetry: Annotated[Dict[str, Any], merge_dicts]
     model_overrides: Annotated[Dict[str, str], replace_value]
+    effort_tier: Annotated[str, replace_value]
+    red_team_report: Annotated[Optional[Dict[str, Any]], replace_value]
+    red_team_auto_ran: Annotated[bool, replace_value]
+    context_attachments: Annotated[List[Dict[str, Any]], replace_value]
 
 
 # ==========================================
@@ -84,6 +94,7 @@ class FactoryState(TypedDict, total=False):
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "MISSING_GOOGLE_API_KEY")
 FAST_MODEL = os.environ.get("FAST_MODEL", "gemini-4-hydrogen").strip() or "gemini-4-hydrogen"
 COMPILER_MODEL = os.environ.get("COMPILER_MODEL", "gemini-4-neon").strip() or "gemini-4-neon"
+HEAVY_MODEL = (os.environ.get("HEAVY_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 FALLBACK_MODEL = (os.environ.get("FALLBACK_MODEL") or FAST_MODEL).strip() or FAST_MODEL
 DECISION_MODEL = os.environ.get("DECISION_MODEL", "gemini-decision-1").strip() or "gemini-decision-1"
 
@@ -91,17 +102,107 @@ HELPER_MODEL = (os.environ.get("HELPER_MODEL") or FAST_MODEL).strip() or FAST_MO
 CONSTRUCT_MODEL = (os.environ.get("CONSTRUCT_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 UPGRADER_MODEL = (os.environ.get("UPGRADER_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
 ADJUDICATOR_MODEL = (os.environ.get("ADJUDICATOR_MODEL") or COMPILER_MODEL).strip() or COMPILER_MODEL
+RED_TEAM_MODEL = (os.environ.get("RED_TEAM_MODEL") or "").strip()
 BETTY_MODEL = (os.environ.get("BETTY_MODEL") or FAST_MODEL).strip() or FAST_MODEL
 LLM_TIMEOUT_SECONDS = float(os.environ.get("LLM_TIMEOUT_SECONDS", "90") or 90)
 LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "1") or 1)
 MAX_QA_ITERATIONS = 2
 MAX_LINTER_RETRIES = 1
 
+_EXPLICIT_ROLE_ENV_MODELS: Dict[str, str] = {}
+for _role_key, _env_name in (
+    ("node_1_helper", "HELPER_MODEL"),
+    ("node_2_construct", "CONSTRUCT_MODEL"),
+    ("node_3_upgrader", "UPGRADER_MODEL"),
+    ("node_4_adjudicator", "ADJUDICATOR_MODEL"),
+    ("red_team", "RED_TEAM_MODEL"),
+    ("betty", "BETTY_MODEL"),
+):
+    _env_val = (os.environ.get(_env_name) or "").strip()
+    if _env_val:
+        _EXPLICIT_ROLE_ENV_MODELS[_role_key] = _env_val
+
+DEFAULT_EFFORT_TIER = "medium"
+VALID_EFFORT_TIERS = ("low", "medium", "high", "overkill")
+MASTER_ONLY_EFFORT_TIERS = frozenset({"high", "overkill"})
+
+EFFORT_PROFILES: Dict[str, Dict[str, Any]] = {
+    "low": {
+        "roles": {
+            "node_1_helper": (FAST_MODEL, "low"),
+            "node_2_construct": (FAST_MODEL, "low"),
+            "node_3_upgrader": (FAST_MODEL, "low"),
+            "node_4_adjudicator": (FAST_MODEL, "low"),
+            "red_team": (FAST_MODEL, "medium"),
+            "betty": (FAST_MODEL, "low"),
+        },
+        "gate_2": {
+            "fast_pass_min_avg": 0.82,
+            "fast_pass_min_dim": 3.0,
+            "require_script_rigor": False,
+            "bypass_fast_pass": False,
+        },
+        "auto_red_team": False,
+    },
+    "medium": {
+        "roles": {
+            "node_1_helper": (FAST_MODEL, "low"),
+            "node_2_construct": (COMPILER_MODEL, "medium"),
+            "node_3_upgrader": (COMPILER_MODEL, "medium"),
+            "node_4_adjudicator": (COMPILER_MODEL, "low"),
+            "red_team": (COMPILER_MODEL, "medium"),
+            "betty": (FAST_MODEL, "low"),
+        },
+        "gate_2": {
+            "fast_pass_min_avg": 0.82,
+            "fast_pass_min_dim": 3.0,
+            "require_script_rigor": True,
+            "bypass_fast_pass": False,
+        },
+        "auto_red_team": False,
+    },
+    "high": {
+        "roles": {
+            "node_1_helper": (COMPILER_MODEL, "low"),
+            "node_2_construct": (COMPILER_MODEL, "high"),
+            "node_3_upgrader": (COMPILER_MODEL, "high"),
+            "node_4_adjudicator": (COMPILER_MODEL, "medium"),
+            "red_team": (COMPILER_MODEL, "medium"),
+            "betty": (COMPILER_MODEL, "low"),
+        },
+        "gate_2": {
+            "fast_pass_min_avg": 0.88,
+            "fast_pass_min_dim": 3.5,
+            "require_script_rigor": True,
+            "bypass_fast_pass": False,
+        },
+        "auto_red_team": False,
+    },
+    "overkill": {
+        "roles": {
+            "node_1_helper": (COMPILER_MODEL, "medium"),
+            "node_2_construct": (HEAVY_MODEL, "high"),
+            "node_3_upgrader": (HEAVY_MODEL, "high"),
+            "node_4_adjudicator": (COMPILER_MODEL, "high"),
+            "red_team": (HEAVY_MODEL, "high"),
+            "betty": (COMPILER_MODEL, "medium"),
+        },
+        "gate_2": {
+            "fast_pass_min_avg": 1.0,
+            "fast_pass_min_dim": 5.0,
+            "require_script_rigor": True,
+            "bypass_fast_pass": True,
+        },
+        "auto_red_team": True,
+    },
+}
+
 NODE_MODEL_DEFAULTS: Dict[str, Dict[str, str]] = {
     "node_1_helper": {"model": HELPER_MODEL, "thinking_level": "low"},
     "node_2_construct": {"model": CONSTRUCT_MODEL, "thinking_level": "medium"},
     "node_3_upgrader": {"model": UPGRADER_MODEL, "thinking_level": "medium"},
     "node_4_adjudicator": {"model": ADJUDICATOR_MODEL, "thinking_level": "low"},
+    "red_team": {"model": RED_TEAM_MODEL or COMPILER_MODEL, "thinking_level": "medium"},
     "betty": {"model": BETTY_MODEL, "thinking_level": "low"},
 }
 
@@ -114,6 +215,8 @@ ROLE_ALIASES: Dict[str, str] = {
     "node_3_upgrader": "node_3_upgrader",
     "adjudicator": "node_4_adjudicator",
     "node_4_adjudicator": "node_4_adjudicator",
+    "red_team": "red_team",
+    "node_red_team_auto": "red_team",
     "betty": "betty",
 }
 
@@ -301,18 +404,106 @@ def resolve_construct_thinking_level(
     return "low"
 
 
+def normalize_effort_tier(raw_tier: Any) -> str:
+    """Validates and normalizes `effort_tier`, defaulting unknown/empty inputs to `medium`."""
+    cleaned = str(raw_tier or "").strip().lower()
+    return cleaned if cleaned in EFFORT_PROFILES else DEFAULT_EFFORT_TIER
+
+
+def get_effort_profile(effort_tier: Any = None) -> Dict[str, Any]:
+    """Returns the EFFORT_PROFILES entry for the normalized effort tier."""
+    return EFFORT_PROFILES[normalize_effort_tier(effort_tier)]
+
+
+def resolve_role_config(
+    role: str,
+    effort_tier: Any = None,
+    xml_text: str = "",
+    target_type: str = "SYSTEM_PROMPT",
+) -> Tuple[str, str]:
+    """
+    Resolves `(model, thinking_level)` for a role under the active `effort_tier`,
+    honoring explicit per-role env overrides (`HELPER_MODEL`, etc.) when configured.
+    """
+    canonical_role = ROLE_ALIASES.get(role, role)
+    tier = normalize_effort_tier(effort_tier)
+    profile_roles = EFFORT_PROFILES[tier]["roles"]
+    default_cfg = NODE_MODEL_DEFAULTS.get(
+        canonical_role, {"model": FAST_MODEL, "thinking_level": "low"}
+    )
+    tier_model, tier_level = profile_roles.get(
+        canonical_role, (default_cfg["model"], default_cfg["thinking_level"])
+    )
+    if canonical_role == "node_2_construct" and tier == "medium":
+        tier_level = resolve_construct_thinking_level(xml_text, target_type)
+    if canonical_role in _EXPLICIT_ROLE_ENV_MODELS:
+        tier_model = _EXPLICIT_ROLE_ENV_MODELS[canonical_role]
+    return tier_model, tier_level
+
+
+def evaluate_gate_2_fast_pass(
+    effort_tier: Any,
+    weighted_avg: float,
+    min_dim_score: float,
+    script_score: Optional[float],
+    iteration_count: int,
+    beats_champ: float,
+    is_manual_override: bool,
+) -> Tuple[bool, str]:
+    """
+    Evaluates Gate 2 Fast-Pass / Post-Override promotion according to the active `effort_tier`.
+    Returns `(passed, fast_path_mode)`.
+    """
+    gate_cfg = get_effort_profile(effort_tier)["gate_2"]
+    if gate_cfg.get("bypass_fast_pass"):
+        return False, ""
+
+    script_gate_ok = (
+        (not gate_cfg.get("require_script_rigor", True))
+        or script_score is None
+        or float(script_score) >= 4.0
+    )
+    min_avg = float(gate_cfg.get("fast_pass_min_avg", 0.82))
+    min_dim = float(gate_cfg.get("fast_pass_min_dim", 3.0))
+
+    if (
+        not is_manual_override
+        and weighted_avg >= min_avg
+        and min_dim_score >= min_dim
+        and script_gate_ok
+        and (iteration_count == 0 or beats_champ >= 0.5)
+    ):
+        return True, "fast_pass"
+
+    if (
+        is_manual_override
+        and min_dim_score >= min_dim
+        and script_gate_ok
+        and (weighted_avg >= min_avg or beats_champ >= 0.5)
+    ):
+        return True, "post_override_pass"
+
+    return False, ""
+
+
 def build_fallback_chain(
     role: str,
     thinking_level: Optional[str] = None,
     model_overrides: Optional[Dict[str, str]] = None,
+    effort_tier: Optional[str] = None,
+    xml_text: str = "",
+    target_type: str = "SYSTEM_PROMPT",
 ) -> List[Tuple[str, str]]:
     canonical_role = ROLE_ALIASES.get(role, role)
-    role_cfg = NODE_MODEL_DEFAULTS.get(
-        canonical_role, {"model": FAST_MODEL, "thinking_level": "low"}
+    tier_model, tier_level = resolve_role_config(
+        canonical_role,
+        effort_tier=effort_tier,
+        xml_text=xml_text,
+        target_type=target_type,
     )
     sanitized = sanitize_model_overrides(model_overrides)
-    primary_model = sanitized.get(canonical_role, role_cfg["model"])
-    primary_level = thinking_level or role_cfg["thinking_level"]
+    primary_model = sanitized.get(canonical_role, tier_model)
+    primary_level = thinking_level or tier_level
 
     candidates: List[Tuple[str, str]] = [(primary_model, primary_level)]
     if FALLBACK_MODEL != primary_model:
@@ -335,32 +526,37 @@ def get_node_routing_plan(
     role: str, state: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     canonical_role = ROLE_ALIASES.get(role, role)
+    effort_tier = normalize_effort_tier((state or {}).get("effort_tier"))
     if canonical_role == "gate_1_5_linter":
         return {
             "role": "gate_1_5_linter",
             "model": "deterministic-linter",
             "thinking_level": "none",
+            "effort_tier": effort_tier,
             "fallback_chain": [],
         }
-    level_override: Optional[str] = None
+    xml_text = ""
+    target_type = "SYSTEM_PROMPT"
     if canonical_role == "node_2_construct" and state:
         xml_text = state.get("challenger_xml") or state.get("champion_xml") or ""
         target_type = state.get("target_type") or "SYSTEM_PROMPT"
         if xml_text:
             meta = extract_blueprint_meta(xml_text)
             target_type = meta.get("target_type") or target_type
-        level_override = resolve_construct_thinking_level(xml_text, target_type)
 
     overrides = state.get("model_overrides") if state else None
     chain = build_fallback_chain(
         role=canonical_role,
-        thinking_level=level_override,
         model_overrides=overrides,
+        effort_tier=effort_tier,
+        xml_text=xml_text,
+        target_type=target_type,
     )
     return {
         "role": canonical_role,
         "model": chain[0][0],
         "thinking_level": chain[0][1],
+        "effort_tier": effort_tier,
         "fallback_chain": [
             {"model": m, "thinking_level": lvl} for m, lvl in chain
         ],
@@ -422,15 +618,21 @@ def _invoke_role_with_fallback(
     thinking_level: Optional[str] = None,
     model_overrides: Optional[Dict[str, str]] = None,
     target_type: Optional[str] = None,
+    effort_tier: Optional[str] = None,
+    xml_text: str = "",
 ) -> Tuple[Any, Dict[str, Any]]:
     """
     Executes a role/node prompt or message list using calibrated per-node routing
     and deterministic fallback (`gemini-4-neon` -> `FALLBACK_MODEL` / `FAST_MODEL`).
     """
+    normalized_tier = normalize_effort_tier(effort_tier)
     chain = build_fallback_chain(
         role=role,
         thinking_level=thinking_level,
         model_overrides=model_overrides,
+        effort_tier=normalized_tier,
+        xml_text=xml_text,
+        target_type=target_type or "SYSTEM_PROMPT",
     )
     primary_model = chain[0][0]
     last_exc: Optional[Exception] = None
@@ -453,7 +655,7 @@ def _invoke_role_with_fallback(
             fallback_used = idx > 0
             target_suffix = f" target_type={target_type}" if target_type else ""
             print(
-                f"    -> [ModelRouter] role={role} model={model_name} "
+                f"    -> [ModelRouter] role={role} tier={normalized_tier} model={model_name} "
                 f"thinking_level={level} fallback_used={fallback_used}"
                 f"{target_suffix} latency_ms={latency_ms:.1f}"
             )
@@ -462,6 +664,7 @@ def _invoke_role_with_fallback(
                 "configured_model": primary_model,
                 "model": model_name,
                 "thinking_level": level,
+                "effort_tier": normalized_tier,
                 "fallback_used": fallback_used,
                 "fallback_from": primary_model if fallback_used else None,
                 "latency_ms": round(latency_ms, 1),
@@ -487,15 +690,17 @@ def _invoke_role_with_fallback(
 
 
 def invoke_betty(
-    messages: List[Any], model_override: Optional[str] = None
+    messages: List[Any],
+    model_override: Optional[str] = None,
+    effort_tier: Optional[str] = None,
 ) -> Tuple[Any, Dict[str, Any]]:
-    """Invokes Betty on low-latency FAST_MODEL (`thinking_level="low"`) with resilient fallback."""
+    """Invokes Betty using the active effort tier's model and thinking budget with resilient fallback."""
     overrides = {"betty": model_override} if model_override else None
     return _invoke_role_with_fallback(
         role="betty",
         messages=messages,
-        thinking_level="low",
         model_overrides=overrides,
+        effort_tier=effort_tier,
     )
 
 
@@ -814,6 +1019,130 @@ def parse_compiled_artifacts(raw_text: str) -> Tuple[str, Dict[str, str]]:
     return primary_output, reference_files
 
 
+ATTACHMENT_VERBATIM_MAX_BYTES = 4096
+ATTACHMENT_TEXT_MAX_CHARS = 120_000
+ATTACHMENT_BINARY_MIMES = frozenset(
+    {"application/pdf", "image/png", "image/jpeg", "image/webp"}
+)
+
+
+def distill_attachment(
+    filename: str, mime_type: str, raw_bytes: bytes
+) -> Dict[str, Any]:
+    """
+    Ingest-Once Distillation:
+    - Small UTF-8 text/code (<= 4096 bytes): stored verbatim with 0 LLM tokens.
+    - Large UTF-8 text/code (> 4096 bytes) and images/PDFs: distilled once via FAST_MODEL (`low`).
+    Never stores raw_bytes or Base64 in the returned dictionary.
+    """
+    clean_name = str(filename or "attachment").strip() or "attachment"
+    clean_mime = str(mime_type or "text/plain").strip().lower()
+    size_bytes = len(raw_bytes or b"")
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    att_id = uuid.uuid4().hex[:10]
+
+    if clean_mime not in ATTACHMENT_BINARY_MIMES and size_bytes <= ATTACHMENT_VERBATIM_MAX_BYTES:
+        decoded = (raw_bytes or b"").decode("utf-8", errors="replace").strip()
+        return {
+            "id": att_id,
+            "filename": clean_name,
+            "mime_type": clean_mime,
+            "size_bytes": size_bytes,
+            "mode": "verbatim",
+            "digest": decoded,
+            "created_at": created_at,
+        }
+
+    system_prompt = ATTACHMENT_DIGEST_PROMPT.format(
+        filename=clean_name, mime_type=clean_mime
+    )
+
+    if clean_mime in ATTACHMENT_BINARY_MIMES:
+        b64_payload = base64.b64encode(raw_bytes or b"").decode("ascii")
+        human_msg = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        f"Distill the attached {clean_mime} file `{clean_name}` "
+                        f"({size_bytes} bytes) into a dense Context Digest."
+                    ),
+                },
+                {
+                    "type": "media",
+                    "mime_type": clean_mime,
+                    "data": b64_payload,
+                },
+            ]
+        )
+        del b64_payload
+    else:
+        raw_text = (raw_bytes or b"").decode("utf-8", errors="replace")
+        truncated_note = ""
+        if len(raw_text) > ATTACHMENT_TEXT_MAX_CHARS:
+            raw_text = raw_text[:ATTACHMENT_TEXT_MAX_CHARS]
+            truncated_note = f"\n[Truncated at {ATTACHMENT_TEXT_MAX_CHARS} chars]"
+        human_msg = HumanMessage(
+            content=(
+                f"Distill the attached file `{clean_name}` ({clean_mime}, {size_bytes} bytes) "
+                f"into a dense Context Digest:\n\n{raw_text}{truncated_note}"
+            )
+        )
+
+    messages = [SystemMessage(content=system_prompt), human_msg]
+    try:
+        response, _ = _invoke_role_with_fallback(
+            role="betty",
+            messages=messages,
+            thinking_level="low",
+            effort_tier="low",
+        )
+        digest_text = _normalize_content(response.content).strip()
+    except Exception as exc:
+        safe_err = _sanitize_error_text(exc)
+        if clean_mime not in ATTACHMENT_BINARY_MIMES:
+            fallback_text = (raw_bytes or b"").decode("utf-8", errors="replace")[:4000]
+            digest_text = f"[Fallback excerpt due to distiller error: {safe_err}]\n{fallback_text}"
+        else:
+            raise RuntimeError(f"Multimodal attachment distillation failed: {safe_err}") from exc
+
+    return {
+        "id": att_id,
+        "filename": clean_name,
+        "mime_type": clean_mime,
+        "size_bytes": size_bytes,
+        "mode": "distilled",
+        "digest": digest_text,
+        "created_at": created_at,
+    }
+
+
+def format_context_attachments(
+    state: Optional[Dict[str, Any]], max_chars: int = 12000
+) -> str:
+    """Formats session `context_attachments` digests into a bounded `<ATTACHED_CONTEXT>` block."""
+    attachments = (state or {}).get("context_attachments") or []
+    if not isinstance(attachments, list) or not attachments:
+        return ""
+    blocks: List[str] = []
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        digest = str(item.get("digest") or "").strip()
+        if not digest:
+            continue
+        fname = str(item.get("filename") or "attachment")
+        mime = str(item.get("mime_type") or "text/plain")
+        mode = str(item.get("mode") or "verbatim")
+        blocks.append(f"### ATTACHMENT: {fname} ({mime}, {mode})\n{digest}")
+    if not blocks:
+        return ""
+    joined = "\n\n".join(blocks)
+    if max_chars > 0 and len(joined) > max_chars:
+        joined = joined[: max_chars - 24].rstrip() + "\n...[context truncated]"
+    return f"<ATTACHED_CONTEXT>\n{joined}\n</ATTACHED_CONTEXT>"
+
+
 def format_artifact_with_references(
     primary_prompt: str,
     reference_files: Optional[Dict[str, str]] = None,
@@ -857,8 +1186,16 @@ def node_helper(state: FactoryState):
     print(">>> Executing Node 1: The Helper")
     user_input = state.get("user_input", "")
     turn_count = 1 + user_input.count("\nUser:")
+    concise_attachments = format_context_attachments(state, max_chars=3000)
+    full_attachments = format_context_attachments(state, max_chars=12000)
+    readiness_input = (
+        f"{user_input}\n\n{concise_attachments}" if concise_attachments else user_input
+    )
+    helper_user_input = (
+        f"{user_input}\n\n{full_attachments}" if full_attachments else user_input
+    )
 
-    readiness = evaluate_with_decision_model(user_input, HELPER_READINESS_QUESTIONS)
+    readiness = evaluate_with_decision_model(readiness_input, HELPER_READINESS_QUESTIONS)
     raw_target = (
         readiness.get("target_type") or state.get("target_type") or "SYSTEM_PROMPT"
     ).strip().upper()
@@ -925,6 +1262,7 @@ def node_helper(state: FactoryState):
                 "triggers/scope, and output contract before compiling <ARTIFACT_BLUEPRINT>."
             )
 
+    effort_tier = normalize_effort_tier(state.get("effort_tier"))
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", HELPER_PROMPT),
@@ -935,13 +1273,13 @@ def node_helper(state: FactoryState):
         role="node_1_helper",
         prompt_template=prompt,
         inputs={
-            "user_input": user_input,
+            "user_input": helper_user_input,
             "missing_fields_hint": missing_fields_hint,
             "needs_scripts": "True" if needs_scripts else "False",
             "is_repo_context": "True" if is_repo_context else "False",
         },
-        thinking_level="low",
         model_overrides=state.get("model_overrides"),
+        effort_tier=effort_tier,
     )
     content = _normalize_content(response.content)
 
@@ -986,9 +1324,7 @@ def node_construct(state: FactoryState):
     print(">>> Executing Node 2: The Construct")
     challenger_xml = state.get("challenger_xml", "")
     meta = extract_blueprint_meta(challenger_xml)
-    thinking_level = resolve_construct_thinking_level(
-        challenger_xml, meta["target_type"]
-    )
+    effort_tier = normalize_effort_tier(state.get("effort_tier"))
     needs_aux = is_needs_auxiliary_files(
         state.get("readiness_scores"), challenger_xml
     ) or has_blueprint_refs(challenger_xml)
@@ -1011,19 +1347,24 @@ def node_construct(state: FactoryState):
         ref_files=state.get("reference_files"),
     )
 
+    attachments_ctx = format_context_attachments(state, max_chars=12000)
+    construct_xml_input = (
+        f"{challenger_xml}\n\n{attachments_ctx}" if attachments_ctx else challenger_xml
+    )
     prompt = PromptTemplate.from_template(CONSTRUCT_PROMPT)
     response, telemetry = _invoke_role_with_fallback(
         role="node_2_construct",
         prompt_template=prompt,
         inputs={
-            "challenger_xml": challenger_xml,
+            "challenger_xml": construct_xml_input,
             "needs_auxiliary_files": "True" if needs_aux else "False",
             "needs_scripts": "True" if needs_scripts else "False",
             "is_repo_context": "True" if is_repo_context else "False",
         },
-        thinking_level=thinking_level,
         model_overrides=state.get("model_overrides"),
         target_type=meta["target_type"],
+        effort_tier=effort_tier,
+        xml_text=challenger_xml,
     )
     raw_content = _normalize_content(response.content)
 
@@ -1036,6 +1377,8 @@ def node_construct(state: FactoryState):
         "needs_scripts": needs_scripts,
         "is_repo_context": is_repo_context or ("AGENTS.md" in ref_files),
         "linter_retries": 0,
+        "red_team_auto_ran": False,
+        "red_team_report": None,
         "model_telemetry": {
             "node_2_construct": telemetry,
             "last_execution": telemetry,
@@ -1110,21 +1453,24 @@ def node_upgrader(state: FactoryState):
         fallback_xml=champion_xml,
         ref_files=state.get("reference_files"),
     )
+    effort_tier = normalize_effort_tier(state.get("effort_tier"))
+    att_ctx = format_context_attachments(state, max_chars=12000)
+    upgrader_xml_input = f"{champion_xml}\n\n{att_ctx}" if att_ctx else champion_xml
     prompt = PromptTemplate.from_template(UPGRADER_PROMPT)
     response, telemetry = _invoke_role_with_fallback(
         role="node_3_upgrader",
         prompt_template=prompt,
         inputs={
-            "champion_xml": champion_xml,
+            "champion_xml": upgrader_xml_input,
             "champion_prompt": champion_prompt,
             "error_log": formatted_errors,
             "needs_scripts": "True" if needs_scripts else "False",
             "is_repo_context": "True" if is_repo_context else "False",
         },
         structured_schema=UpgraderOutput,
-        thinking_level="medium",
         model_overrides=state.get("model_overrides"),
         target_type=current_target,
+        effort_tier=effort_tier,
     )
 
     meta = extract_blueprint_meta(response.updated_xml)
@@ -1237,6 +1583,8 @@ def node_adjudicator(state: FactoryState):
     """
     print(">>> Executing Node 4: The Adjudicator")
 
+    effort_tier = normalize_effort_tier(state.get("effort_tier"))
+    gate_cfg = get_effort_profile(effort_tier)["gate_2"]
     iteration_count = state.get("iteration_count", 0)
     user_input = state.get("user_input", "")
     champion_xml = state.get("champion_xml", "")
@@ -1259,7 +1607,10 @@ def node_adjudicator(state: FactoryState):
     if current_target not in VALID_TARGET_TYPES:
         current_target = "SYSTEM_PROMPT"
 
-    rubric_questions = get_rubric_questions(current_target)
+    has_scripts = bool(state.get("needs_scripts", False)) or any(
+        p.endswith(".py") for p in ref_files
+    )
+    rubric_questions = get_rubric_questions(current_target, needs_scripts=has_scripts)
     active_score_keys = tuple(
         q["name"] for q in rubric_questions if q.get("type") == "score"
     )
@@ -1296,13 +1647,22 @@ def node_adjudicator(state: FactoryState):
     )
 
     # --- Stage A: Quantitative Rubric Evaluation via gemini-decision-1 ---
+    concise_attachments = format_context_attachments(state, max_chars=3000)
+    full_attachments = format_context_attachments(state, max_chars=12000)
+    stage_b_user_input = (
+        f"{effective_user_input}\n\n{full_attachments}"
+        if full_attachments
+        else effective_user_input
+    )
     eval_context = (
         f"TARGET TYPE: {current_target}\n"
         f"NEEDS AUXILIARY FILES: {needs_aux}\n"
-        f"AUXILIARY REFERENCES COUNT: {len(aux_ref_paths)}\n\n"
+        f"AUXILIARY REFERENCES COUNT: {len(aux_ref_paths)}\n"
+        f"HAS SCRIPTS: {has_scripts}\n\n"
         f"USER INTENT:\n{effective_user_input}\n\n"
-        f"CHALLENGER XML:\n{challenger_xml}\n\n"
-        f"CHALLENGER ARTIFACT:\n{challenger_prompt}\n"
+        + (f"{concise_attachments}\n\n" if concise_attachments else "")
+        + f"CHALLENGER XML:\n{challenger_xml}\n\n"
+        + f"CHALLENGER ARTIFACT:\n{challenger_prompt}\n"
     )
     if iteration_count > 0 and champion_prompt:
         eval_context += f"\nCURRENT CHAMPION ARTIFACT:\n{champion_prompt}\n"
@@ -1332,33 +1692,39 @@ def node_adjudicator(state: FactoryState):
         rubric_scores["weighted_average"] = round(weighted_avg, 4)
 
         min_dim_score = min(dim_scores) if dim_scores else 0.0
+        script_score = rubric_scores.get("script_rigor_and_parity")
+        script_gate_ok = (
+            (not gate_cfg.get("require_script_rigor", True))
+            or script_score is None
+            or float(script_score) >= 4.0
+        )
         print(
-            f"    -> Decision Rubric Avg ({len(dim_scores)}D): {weighted_avg:.2f} | Min Dim: {min_dim_score:.2f}/5.0"
+            f"    -> Decision Rubric Avg ({len(dim_scores)}D, tier={effort_tier}): {weighted_avg:.2f} | Min Dim: {min_dim_score:.2f}/5.0"
+            + (f" | Script Rigor: {float(script_score):.2f}/5.0" if script_score is not None else "")
         )
 
         # --- Stage B (Fast Pass / Post-Override Promotion): Skip generative LLM call if criteria met ---
-        fast_pass_standard = (
-            not is_manual_override
-            and weighted_avg >= 0.82
-            and min_dim_score >= 3.0
-            and (iteration_count == 0 or beats_champ >= 0.5)
+        fast_passed, fast_path_mode = evaluate_gate_2_fast_pass(
+            effort_tier=effort_tier,
+            weighted_avg=weighted_avg,
+            min_dim_score=min_dim_score,
+            script_score=float(script_score) if script_score is not None else None,
+            iteration_count=iteration_count,
+            beats_champ=beats_champ,
+            is_manual_override=is_manual_override,
         )
-        post_override_pass = (
-            is_manual_override
-            and min_dim_score >= 3.0
-            and (weighted_avg >= 0.82 or beats_champ >= 0.5)
-        )
-        if fast_pass_standard or post_override_pass:
-            pass_mode = "Post-override PASS" if post_override_pass else "Fast PASS"
+        if fast_passed:
+            pass_mode = "Post-override PASS" if fast_path_mode == "post_override_pass" else "Fast PASS"
             print(f"    -> {pass_mode} via gemini-decision-1 (0 output tokens used)")
             fast_telemetry = {
                 "role": "node_4_adjudicator",
                 "configured_model": DECISION_MODEL,
                 "model": DECISION_MODEL,
                 "thinking_level": "none",
+                "effort_tier": effort_tier,
                 "fallback_used": False,
                 "fallback_from": None,
-                "fast_path": "post_override_pass" if post_override_pass else "fast_pass",
+                "fast_path": fast_path_mode,
                 "latency_ms": decision_eval.get("latency_ms", 0.0),
             }
             return {
@@ -1392,6 +1758,7 @@ def node_adjudicator(state: FactoryState):
                 "configured_model": DECISION_MODEL,
                 "model": DECISION_MODEL,
                 "thinking_level": "none",
+                "effort_tier": effort_tier,
                 "fallback_used": False,
                 "fallback_from": None,
                 "fast_path": "plateau_escalate",
@@ -1411,6 +1778,15 @@ def node_adjudicator(state: FactoryState):
             }
 
         formatted_rubric_scores = json.dumps(rubric_scores, indent=2)
+        if not script_gate_ok and script_score is not None:
+            formatted_rubric_scores += (
+                "\n\n[SCRIPT RIGOR GATE TRIGGERED]\n"
+                f"`script_rigor_and_parity` scored {float(script_score):.2f}/5.0 (< 4.0 required).\n"
+                "Perform adversarial mental edge-case execution across all `scripts/*.py` "
+                "(multi-line assigned strings vs. docstrings, lazy/`TYPE_CHECKING` imports, "
+                "extensionless ops files, O(N) scalability, and 1:1 Script-Playbook Parity) and emit "
+                "concrete code-level `correction_directive` fixes."
+            )
     else:
         formatted_rubric_scores = (
             f"Decision engine unavailable; rely on full {len(active_score_keys)}-Point Rubric audit."
@@ -1435,16 +1811,16 @@ def node_adjudicator(state: FactoryState):
             role="node_4_adjudicator",
             prompt_template=prompt,
             inputs={
-                "user_input": effective_user_input,
+                "user_input": stage_b_user_input,
                 "challenger_xml": challenger_xml,
                 "challenger_prompt": challenger_prompt,
                 "decision_rubric_scores": formatted_rubric_scores,
                 "iteration_count": iteration_count,
             },
             structured_schema=AdjudicatorDecision,
-            thinking_level="low",
             model_overrides=state.get("model_overrides"),
             target_type=current_target,
+            effort_tier=effort_tier,
         )
     else:
         print(f"    -> Mode: Regression QA (Iteration {iteration_count})")
@@ -1454,7 +1830,7 @@ def node_adjudicator(state: FactoryState):
             role="node_4_adjudicator",
             prompt_template=prompt,
             inputs={
-                "user_input": effective_user_input,
+                "user_input": stage_b_user_input,
                 "champion_xml": champion_xml,
                 "champion_prompt": champion_prompt,
                 "challenger_xml": challenger_xml,
@@ -1464,9 +1840,9 @@ def node_adjudicator(state: FactoryState):
                 "iteration_count": iteration_count,
             },
             structured_schema=AdjudicatorDecision,
-            thinking_level="low",
             model_overrides=state.get("model_overrides"),
             target_type=current_target,
+            effort_tier=effort_tier,
         )
 
     if monolith_guardrail_triggered and decision.status == "PASS":
@@ -1583,6 +1959,206 @@ def node_gate_1_5_linter(state: FactoryState):
 # ==========================================
 
 
+def parse_red_team_report(raw_text: str) -> Dict[str, Any]:
+    """
+    Parses and normalizes Adversarial Red-Team JSON output.
+    Defensively strips Markdown code fences and returns a safe structured fallback on parse error.
+    """
+    fallback: Dict[str, Any] = {
+        "verdict": "NEEDS_HARDENING",
+        "summary": "Red-Team output could not be parsed cleanly as JSON; manual review recommended.",
+        "findings": [],
+        "patch_directive": "",
+        "parse_error": True,
+    }
+    if not raw_text or not isinstance(raw_text, str):
+        return fallback
+
+    cleaned = raw_text.strip()
+    fence_match = re.search(
+        r"```(?:json)?\s*\n(.*?)\n```", cleaned, flags=re.DOTALL | re.IGNORECASE
+    )
+    if fence_match:
+        cleaned = fence_match.group(1).strip()
+
+    parsed_obj: Any = None
+    try:
+        parsed_obj = json.loads(cleaned)
+    except Exception:
+        start_idx = cleaned.find("{")
+        end_idx = cleaned.rfind("}")
+        if start_idx != -1 and end_idx > start_idx:
+            try:
+                parsed_obj = json.loads(cleaned[start_idx : end_idx + 1])
+            except Exception:
+                parsed_obj = None
+
+    if not isinstance(parsed_obj, dict):
+        return fallback
+
+    raw_findings = parsed_obj.get("findings")
+    normalized_findings: List[Dict[str, str]] = []
+    if isinstance(raw_findings, list):
+        for idx, item in enumerate(raw_findings[:5], start=1):
+            if not isinstance(item, dict):
+                continue
+            raw_sev = str(item.get("severity") or "High").strip().capitalize()
+            sev = raw_sev if raw_sev in ("Critical", "High", "Medium") else "High"
+            fid = str(item.get("id") or f"f{idx}").strip() or f"f{idx}"
+            target_file = normalize_artifact_path(str(item.get("target_file") or "")) or str(
+                item.get("target_file") or "SKILL.md"
+            ).strip()
+            title = str(item.get("title") or f"Finding {idx}").strip()
+            evidence = str(item.get("evidence") or "").strip()
+            fix = str(item.get("fix") or "").strip()
+            if title or evidence or fix:
+                normalized_findings.append(
+                    {
+                        "id": fid,
+                        "severity": sev,
+                        "target_file": target_file,
+                        "title": title,
+                        "evidence": evidence,
+                        "fix": fix,
+                    }
+                )
+
+    raw_verdict = str(parsed_obj.get("verdict") or "").strip().upper()
+    if raw_verdict not in ("PRODUCTION_READY", "NEEDS_HARDENING"):
+        raw_verdict = "NEEDS_HARDENING" if normalized_findings else "PRODUCTION_READY"
+
+    if raw_verdict == "PRODUCTION_READY":
+        normalized_findings = []
+        patch_directive = ""
+    else:
+        patch_directive = str(parsed_obj.get("patch_directive") or "").strip()
+
+    summary = str(parsed_obj.get("summary") or "").strip()
+    if not summary:
+        summary = (
+            "No concrete defects found."
+            if raw_verdict == "PRODUCTION_READY"
+            else "Adversarial audit detected defects requiring hardening."
+        )
+
+    return {
+        "verdict": raw_verdict,
+        "summary": summary,
+        "findings": normalized_findings,
+        "patch_directive": patch_directive,
+        "parse_error": False,
+    }
+
+
+def _build_red_team_goal_summary(state: Dict[str, Any]) -> str:
+    """Builds a bias-free concise goal summary from blueprint metadata or initial prompt."""
+    xml_text = str(state.get("champion_xml") or state.get("challenger_xml") or "")
+    parts: List[str] = []
+    for tag in (
+        "ROLE_TITLE",
+        "SLUG_NAME",
+        "DESCRIPTION_AND_TRIGGERS",
+        "CORE_WORKFLOW",
+        "GUARDRAILS",
+    ):
+        m = re.search(rf"<{tag}>(.*?)</{tag}>", xml_text, flags=re.DOTALL | re.IGNORECASE)
+        if m and m.group(1).strip():
+            parts.append(f"{tag}: {m.group(1).strip()[:320]}")
+    if parts:
+        return "\n".join(parts)
+
+    raw_input = str(state.get("user_input") or "").strip()
+    initial_only = raw_input.split("\nAssistant:", 1)[0].strip()
+    return initial_only[:600] or "No goal summary provided."
+
+
+def invoke_red_team(state: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Executes an isolated, strictly read-only Adversarial Red-Team audit against
+    the compiled artifact(s) without Generator Bias.
+    """
+    target_type = str(state.get("target_type") or "SYSTEM_PROMPT").strip().upper()
+    effort_tier = normalize_effort_tier(state.get("effort_tier"))
+    primary_prompt = str(
+        state.get("champion_prompt")
+        or state.get("challenger_prompt")
+        or state.get("final_prompt")
+        or ""
+    )
+    ref_files = state.get("reference_files") or {}
+    compiled_artifact = format_artifact_with_references(primary_prompt, ref_files)
+    goal_summary = _build_red_team_goal_summary(state)
+    att_ctx = format_context_attachments(state, max_chars=8000)
+    if att_ctx:
+        goal_summary = f"{goal_summary}\n\n{att_ctx}"
+
+    prompt = PromptTemplate.from_template(RED_TEAM_PROMPT)
+    response, telemetry = _invoke_role_with_fallback(
+        role="red_team",
+        prompt_template=prompt,
+        inputs={
+            "target_type": target_type,
+            "goal_summary": goal_summary,
+            "compiled_artifact": compiled_artifact,
+        },
+        model_overrides=state.get("model_overrides"),
+        target_type=target_type,
+        effort_tier=effort_tier,
+    )
+    report = parse_red_team_report(_normalize_content(response.content))
+    report["model"] = telemetry.get("model")
+    report["thinking_level"] = telemetry.get("thinking_level")
+    report["effort_tier"] = telemetry.get("effort_tier")
+    report["latency_ms"] = telemetry.get("latency_ms")
+    return report
+
+
+def node_red_team_auto(state: FactoryState):
+    """
+    Single-pass automated Adversarial Red-Team hook (`overkill` effort tier only).
+    Runs once after Gate 2 PASS, persists `red_team_report`, and routes once to
+    `node_3_upgrader` if `NEEDS_HARDENING` with a non-empty `patch_directive`.
+    """
+    print(">>> Executing Node: Red-Team Auto-Audit (Overkill)")
+    report = invoke_red_team(dict(state))
+    verdict = report.get("verdict", "NEEDS_HARDENING")
+    patch_directive = (report.get("patch_directive") or "").strip()
+
+    telemetry = {
+        "role": "node_red_team_auto",
+        "configured_model": report.get("model") or HEAVY_MODEL,
+        "model": report.get("model") or HEAVY_MODEL,
+        "thinking_level": report.get("thinking_level") or "high",
+        "effort_tier": normalize_effort_tier(state.get("effort_tier")),
+        "fallback_used": False,
+        "fallback_from": None,
+        "latency_ms": report.get("latency_ms", 0.0),
+    }
+
+    update: Dict[str, Any] = {
+        "red_team_auto_ran": True,
+        "red_team_report": report,
+        "model_telemetry": {
+            "node_red_team_auto": telemetry,
+            "last_execution": telemetry,
+        },
+    }
+
+    if verdict == "NEEDS_HARDENING" and patch_directive:
+        prev_rubric = state.get("rubric_scores") or {}
+        cleaned_rubric = {
+            k: v for k, v in prev_rubric.items() if k != "weighted_average"
+        }
+        update["iteration_count"] = 0
+        update["linter_retries"] = 0
+        update["rubric_scores"] = cleaned_rubric
+        update["error_log"] = [f"[RED-TEAM AUTO-HARDEN] {patch_directive}"]
+    else:
+        update["error_log"] = ["[PASS] Red-Team auto-audit: PRODUCTION_READY."]
+
+    return update
+
+
 def route_from_start(state: FactoryState):
     """
     מנתב את נקודת הכניסה לגרף.
@@ -1617,7 +2193,15 @@ def route_from_adjudicator(state: FactoryState):
     last_log = logs[-1]
     iteration_count = state.get("iteration_count", 0)
 
-    if "[PASS]" in last_log or "[ESCALATE]" in last_log:
+    if "[PASS]" in last_log:
+        if (
+            get_effort_profile(state.get("effort_tier")).get("auto_red_team")
+            and not state.get("red_team_auto_ran")
+        ):
+            return "node_red_team_auto"
+        return END
+
+    if "[ESCALATE]" in last_log:
         return END
 
     if "[FAIL]" in last_log:
@@ -1632,6 +2216,16 @@ def route_from_adjudicator(state: FactoryState):
     return END
 
 
+def route_from_red_team(state: FactoryState):
+    report = state.get("red_team_report") or {}
+    if (
+        report.get("verdict") == "NEEDS_HARDENING"
+        and (report.get("patch_directive") or "").strip()
+    ):
+        return "node_3_upgrader"
+    return END
+
+
 def resolve_next_node(current_node: str, state: FactoryState) -> str:
     """Canonical single source of truth for intra-graph node transitions."""
     if current_node == "node_1_helper":
@@ -1642,6 +2236,8 @@ def resolve_next_node(current_node: str, state: FactoryState) -> str:
         return route_from_linter(state)
     if current_node == "node_4_adjudicator":
         return route_from_adjudicator(state)
+    if current_node == "node_red_team_auto":
+        return route_from_red_team(state)
     return END
 
 
@@ -1653,6 +2249,7 @@ builder.add_node("node_2_construct", node_construct)
 builder.add_node("gate_1_5_linter", node_gate_1_5_linter)
 builder.add_node("node_3_upgrader", node_upgrader)
 builder.add_node("node_4_adjudicator", node_adjudicator)
+builder.add_node("node_red_team_auto", node_red_team_auto)
 
 # 2. Add Edges
 builder.add_conditional_edges(START, route_from_start)
@@ -1661,6 +2258,7 @@ builder.add_edge("node_2_construct", "gate_1_5_linter")
 builder.add_edge("node_3_upgrader", "gate_1_5_linter")
 builder.add_conditional_edges("gate_1_5_linter", route_from_linter)
 builder.add_conditional_edges("node_4_adjudicator", route_from_adjudicator)
+builder.add_conditional_edges("node_red_team_auto", route_from_red_team)
 
 # 3. Compile Graph
 graph = builder.compile()
@@ -1688,6 +2286,10 @@ def make_initial_state(user_input: str = "") -> FactoryState:
         "slug_name": "",
         "needs_scripts": False,
         "is_repo_context": False,
+        "effort_tier": DEFAULT_EFFORT_TIER,
+        "red_team_report": None,
+        "red_team_auto_ran": False,
+        "context_attachments": [],
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},

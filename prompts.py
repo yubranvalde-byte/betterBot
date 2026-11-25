@@ -220,6 +220,48 @@ ADJUDICATOR_RUBRIC_QUESTIONS = [
     },
 ]
 
+OPERATIONAL_RESILIENCE_QUESTION = {
+    "name": "operational_resilience",
+    "type": "score",
+    "min_score": 0,
+    "max_score": 5,
+    "question": (
+        "Does the skill/bundle demonstrate production operational resilience: handling real-world edge cases, "
+        "Scale Triage for large inputs/repos, Git/rollback safety guardrails when modifying files, "
+        "portable `<skill_dir>/scripts/<name>.py` invocation (plus Windows `python` and manual fallbacks), "
+        "Net-LOC / Simplification-First discipline, and Language Mirroring defaults?"
+    ),
+    "rubric": {
+        0: "Unsafe or brittle instructions with no edge-case handling, rollback safety, or portability.",
+        1: "Major resilience gaps: hardcoded paths, missing safety checks on file edits, or speculative bloat.",
+        2: "Partial guardrails, but omits scale triage, rollback safety, or script portability/fallbacks.",
+        3: "Acceptable operational hygiene with minor gaps in edge-case triage or fallback clarity.",
+        4: "Strong operational resilience covering edge cases, scale triage, rollback safety, and portability.",
+        5: "Bulletproof operational resilience: crisp scale triage, rollback guardrails, portable paths/fallbacks, Net-LOC discipline, and Language Mirroring.",
+    },
+}
+
+SCRIPT_RIGOR_AND_PARITY_QUESTION = {
+    "name": "script_rigor_and_parity",
+    "type": "score",
+    "min_score": 0,
+    "max_score": 5,
+    "question": (
+        "For `scripts/*.py` (when `needs_scripts=True`): Does every deterministic metric, threshold, or check "
+        "in `SKILL.md` / `references/*` have 1:1 computational parity in `scripts/*.py`, using O(N) algorithms "
+        "and stdlib `ast`/`tokenize`/`json` parsers instead of naive line heuristics, without edge-case bugs "
+        "(e.g., multi-line assigned strings vs. docstrings, lazy/`TYPE_CHECKING` imports, extensionless ops files)?"
+    ),
+    "rubric": {
+        0: "Missing scripts despite `needs_scripts=True`, broken parity, or severe parser/runtime flaws.",
+        1: "Major Script-Playbook Parity gaps, O(N^2) bottlenecks, or fragile naive line-parsing bugs.",
+        2: "Partial implementation; several thresholds from `SKILL.md`/`references/*` are unimplemented or edge-case buggy.",
+        3: "Functional stdlib scripts, though minor edge cases (lazy imports, multi-line strings, large inputs) or parity gaps remain.",
+        4: "High-rigor O(N) stdlib scripts with full threshold parity and clean handling of common parser edge cases.",
+        5: "Exemplary script engineering: 100% Script-Playbook Parity, O(N) single-pass indices, rock-solid `ast`/`tokenize`/`json` parsing, and zero edge-case defects.",
+    },
+}
+
 TRIGGER_DECONFLICTION_QUESTION = {
     "name": "trigger_deconfliction",
     "type": "score",
@@ -241,20 +283,28 @@ TRIGGER_DECONFLICTION_QUESTION = {
 }
 
 
-def get_rubric_questions(target_type: str = "SYSTEM_PROMPT"):
+def get_rubric_questions(
+    target_type: str = "SYSTEM_PROMPT",
+    needs_scripts: bool = False,
+):
     """
     Returns the target-aware Gate 2 rubric questions for `gemini-decision-1`.
-    Preserves the standard 6-dimension rubric for SYSTEM_PROMPT, SKILL_PACKAGE,
-    and HYBRID_BUNDLE, and appends `trigger_deconfliction` for SKILL_SUITE.
+    - `SYSTEM_PROMPT`: preserves the standard 6-dimension rubric.
+    - `SKILL_PACKAGE` / `HYBRID_BUNDLE`: appends `operational_resilience` (and `script_rigor_and_parity` when `needs_scripts=True`).
+    - `SKILL_SUITE`: appends `operational_resilience`, optional `script_rigor_and_parity`, and `trigger_deconfliction`.
     """
     normalized = (target_type or "SYSTEM_PROMPT").strip().upper()
+    if normalized == "SYSTEM_PROMPT":
+        return list(ADJUDICATOR_RUBRIC_QUESTIONS)
+
+    questions = list(ADJUDICATOR_RUBRIC_QUESTIONS[:-1])
+    questions.append(OPERATIONAL_RESILIENCE_QUESTION)
+    if needs_scripts:
+        questions.append(SCRIPT_RIGOR_AND_PARITY_QUESTION)
     if normalized == "SKILL_SUITE":
-        return (
-            ADJUDICATOR_RUBRIC_QUESTIONS[:-1]
-            + [TRIGGER_DECONFLICTION_QUESTION]
-            + ADJUDICATOR_RUBRIC_QUESTIONS[-1:]
-        )
-    return list(ADJUDICATOR_RUBRIC_QUESTIONS)
+        questions.append(TRIGGER_DECONFLICTION_QUESTION)
+    questions.extend(ADJUDICATOR_RUBRIC_QUESTIONS[-1:])
+    return questions
 
 
 # =====================================================================
@@ -273,5 +323,7 @@ CONSTRUCT_PROMPT = _load_prompt("construct.md")
 UPGRADER_PROMPT = _load_prompt("upgrader.md")
 ADJUDICATOR_BASELINE_PROMPT = _load_prompt("adjudicator_baseline.md")
 ADJUDICATOR_REGRESSION_PROMPT = _load_prompt("adjudicator_regression.md")
+RED_TEAM_PROMPT = _load_prompt("red_team.md")
+ATTACHMENT_DIGEST_PROMPT = _load_prompt("attachment_digest.md")
 BETTY_TECH_SUPPORT_PROMPT = _load_prompt("betty_tech_support.md")
 BETTY_PROMPT_ADVISOR_PROMPT = _load_prompt("betty_prompt_advisor.md")

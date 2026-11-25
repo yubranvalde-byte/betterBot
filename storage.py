@@ -228,6 +228,63 @@ def _hydrate_session_reference_files(session_data: Dict[str, Any]) -> None:
     session_data["is_repo_context"] = is_repo_context
     if isinstance(state, dict):
         state["is_repo_context"] = is_repo_context
+    raw_effort = (
+        state.get("effort_tier")
+        if isinstance(state, dict) and "effort_tier" in state
+        else session_data.get("effort_tier")
+    )
+    cleaned_effort = str(raw_effort or "").strip().lower()
+    effort_tier = (
+        cleaned_effort
+        if cleaned_effort in ("low", "medium", "high", "overkill")
+        else "medium"
+    )
+    session_data["effort_tier"] = effort_tier
+    if isinstance(state, dict):
+        state["effort_tier"] = effort_tier
+    raw_rt_report = (
+        state.get("red_team_report")
+        if isinstance(state, dict) and "red_team_report" in state
+        else session_data.get("red_team_report")
+    )
+    rt_report = raw_rt_report if isinstance(raw_rt_report, dict) else None
+    session_data["red_team_report"] = rt_report
+    if isinstance(state, dict):
+        state["red_team_report"] = rt_report
+    raw_rt_auto = (
+        state.get("red_team_auto_ran")
+        if isinstance(state, dict) and "red_team_auto_ran" in state
+        else session_data.get("red_team_auto_ran", False)
+    )
+    rt_auto = bool(raw_rt_auto)
+    session_data["red_team_auto_ran"] = rt_auto
+    if isinstance(state, dict):
+        state["red_team_auto_ran"] = rt_auto
+
+    raw_attachments = (
+        state.get("context_attachments")
+        if isinstance(state, dict) and "context_attachments" in state
+        else session_data.get("context_attachments", [])
+    )
+    safe_attachments: List[Dict[str, Any]] = []
+    if isinstance(raw_attachments, list):
+        for item in raw_attachments:
+            if not isinstance(item, dict):
+                continue
+            safe_attachments.append(
+                {
+                    "id": str(item.get("id") or ""),
+                    "filename": str(item.get("filename") or ""),
+                    "mime_type": str(item.get("mime_type") or "text/plain"),
+                    "size_bytes": int(item.get("size_bytes") or 0),
+                    "mode": "distilled" if item.get("mode") == "distilled" else "verbatim",
+                    "digest": str(item.get("digest") or ""),
+                    "created_at": str(item.get("created_at") or ""),
+                }
+            )
+    session_data["context_attachments"] = list(safe_attachments)
+    if isinstance(state, dict):
+        state["context_attachments"] = list(safe_attachments)
 
 
 def _extract_metadata(session_data: Dict[str, Any]) -> Dict[str, Any]:

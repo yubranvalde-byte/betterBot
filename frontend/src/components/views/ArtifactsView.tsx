@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Stack,
+  Sword,
   Target,
   Warning,
 } from '@phosphor-icons/react';
@@ -44,6 +45,7 @@ import { parseYamlFrontmatter } from '../../utils/frontmatter';
 import { decodeHtmlEntities } from '../../utils/text';
 import { CodeBlock } from '../common/CodeBlock';
 import { MarkdownRenderer } from '../common/MarkdownRenderer';
+import { RedTeamPanel } from '../common/RedTeamPanel';
 import { PrismBar } from '../PrismBar';
 import { Tooltip } from '../Tooltip';
 
@@ -87,9 +89,11 @@ interface ArtifactsViewProps {
   activeFile: string;
   onChangeFile: (file: string) => void;
   isStreaming: boolean;
+  isRedTeaming: boolean;
   activeStreamingNode: NodeId | null;
   activeStreamingDesc: string;
   onRunUpgrader: (directive: string) => void;
+  onRunRedTeam: () => void;
   onDownloadZip: () => void;
   onNavigateToQa: () => void;
   onShowToast: (message: string, tone?: ToastTone) => void;
@@ -102,9 +106,11 @@ export function ArtifactsView({
   activeFile,
   onChangeFile,
   isStreaming,
+  isRedTeaming,
   activeStreamingNode,
   activeStreamingDesc,
   onRunUpgrader,
+  onRunRedTeam,
   onDownloadZip,
   onNavigateToQa,
   onShowToast,
@@ -149,6 +155,9 @@ export function ArtifactsView({
   const bestPrompt = getBestPrompt(session);
   const hasPrimaryText = Boolean(bestPrompt.trim());
   const hasAnyArtifact = hasPrimaryText || refKeys.length > 0;
+  const canRunRedTeam =
+    hasAnyArtifact && (session?.status === 'passed' || session?.status === 'escalated');
+  const redTeamReport = session?.red_team_report ?? state?.red_team_report ?? null;
 
   const { resolvedFile, displayedContent, rawContent, parsedFrontmatter } = useMemo(() => {
     const resolved = resolveActiveArtifactFile(session, activeFile);
@@ -359,6 +368,24 @@ export function ArtifactsView({
             {/* Minimal Action Controls */}
             {activeTab === 'prompt' ? (
               <div className="flex items-center gap-2">
+                {canRunRedTeam && (
+                  <Tooltip content="הרץ תקיפה אדוורסרית (Red-Team) על התוצר" placement="bottom">
+                    <button
+                      type="button"
+                      disabled={isStreaming || isRedTeaming}
+                      onClick={onRunRedTeam}
+                      className="prism-interactive h-8 px-2.5 rounded-md border border-hairline bg-white/80 backdrop-blur-md disabled:opacity-45 text-xs font-medium text-obsidian inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      {isRedTeaming ? (
+                        <CircleNotch size={14} className="animate-spin text-amber" />
+                      ) : (
+                        <Sword size={14} weight="bold" className="text-amber" />
+                      )}
+                      <span>⚔️ Red-Team</span>
+                    </button>
+                  </Tooltip>
+                )}
+
                 <Tooltip content="העתק את תוכן הקובץ הפעיל" placement="bottom">
                   <button
                     type="button"
@@ -495,6 +522,15 @@ export function ArtifactsView({
                   )
                 ) : (
                   <div>
+                    {redTeamReport && (
+                      <div className="mb-6">
+                        <RedTeamPanel
+                          report={redTeamReport}
+                          isStreaming={isStreaming}
+                          onHarden={onRunUpgrader}
+                        />
+                      </div>
+                    )}
                     {/* Active File Sub-title */}
                     <div className="flex items-center justify-between gap-2 pb-4 mb-6 border-b border-hairline">
                       <span dir="ltr" className="font-mono text-xs font-semibold text-obsidian inline-flex items-center gap-2">

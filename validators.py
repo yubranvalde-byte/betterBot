@@ -186,6 +186,163 @@ def _extract_reference_paths(content: str) -> List[str]:
     return found
 
 
+def _is_nonzero_int_expr(node: Optional[ast.AST]) -> bool:
+    """Returns True if an AST return expression contains a non-zero integer constant."""
+    if node is None:
+        return False
+    for child in ast.walk(node):
+        if (
+            isinstance(child, ast.Constant)
+            and isinstance(child.value, int)
+            and not isinstance(child.value, bool)
+            and child.value != 0
+        ):
+            return True
+    return False
+
+
+def _lint_script_ast(rel_path: str, tree: ast.AST, errors: List[str]) -> None:
+    """
+    Strictly static AST security and CLI hygiene inspection for generated `scripts/*.py`.
+    NEVER executes generated scripts.
+    """
+    os_aliases: Set[str] = set()
+    os_system_aliases: Set[str] = set()
+    subprocess_aliases: Set[str] = set()
+    subprocess_fn_aliases: Set[str] = set()
+    sys_aliases: Set[str] = set()
+    sys_argv_aliases: Set[str] = set()
+    sys_exit_aliases: Set[str] = set()
+    builtins_aliases: Set[str] = set()
+    builtins_exec_aliases: Set[str] = set()
+
+    uses_argparse = False
+    uses_sys_argv = False
+    has_error_exit = False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                if alias.name == "os":
+                    os_aliases.add(bound)
+                elif alias.name == "subprocess":
+                    subprocess_aliases.add(bound)
+                elif alias.name == "sys":
+                    sys_aliases.add(bound)
+                elif alias.name == "argparse":
+                    uses_argparse = True
+                elif alias.name == "builtins":
+                    builtins_aliases.add(bound)
+        elif isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                if mod == "os" and alias.name == "system":
+                    os_system_aliases.add(bound)
+                elif mod == "subprocess":
+                    subprocess_fn_aliases.add(bound)
+                elif mod == "sys":
+                    if alias.name == "argv":
+                        sys_argv_aliases.add(bound)
+                    elif alias.name == "exit":
+                        sys_exit_aliases.add(bound)
+                elif mod == "argparse":
+                    uses_argparse = True
+                elif mod == "builtins" and alias.name in ("eval", "exec"):
+                    builtins_exec_aliases.add(bound)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            if (
+                isinstance(node.value, ast.Name)
+                and node.value.id in sys_aliases
+                and node.attr == "argv"
+            ):
+                uses_sys_argv = True
+            elif (
+                isinstance(node.value, ast.Name)
+                and node.value.id in sys_aliases
+                and node.attr == "exit"
+            ):
+                has_error_exit = True
+        elif isinstance(node, ast.Name):
+            if node.id in sys_argv_aliases:
+                uses_sys_argv = True
+            elif node.id == "SystemExit":
+                has_error_exit = True
+            elif node.id == "argparse":
+                uses_argparse = True
+
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Return) and _is_nonzero_int_expr(inner.value):
+                    has_error_exit = True
+                    break
+
+        if isinstance(node, ast.Call):
+            func = node.func
+            lineno = getattr(node, "lineno", "?")
+            if isinstance(func, ast.Name):
+                if func.id in ("eval", "exec") or func.id in builtins_exec_aliases:
+                    errors.append(
+                        f"Unsafe execution primitive '{func.id}()' in '{rel_path}' (line {lineno}): "
+                        "remove eval/exec and use explicit stdlib parsing (ast/json)."
+                    )
+                elif func.id in os_system_aliases:
+                    errors.append(
+                        f"Unsafe execution primitive 'os.system()' via '{func.id}()' in '{rel_path}' (line {lineno}): "
+                        "use subprocess.run([...], shell=False) or pure Python stdlib instead."
+                    )
+                elif func.id in sys_exit_aliases:
+                    has_error_exit = True
+                elif func.id in subprocess_fn_aliases and any(
+                    kw.arg == "shell"
+                    and isinstance(kw.value, ast.Constant)
+                    and bool(kw.value.value) is True
+                    for kw in node.keywords
+                ):
+                    errors.append(
+                        f"Unsafe subprocess shell=True call '{func.id}(..., shell=True)' in '{rel_path}' (line {lineno}): "
+                        "pass an argument list with shell=False."
+                    )
+            elif isinstance(func, ast.Attribute):
+                owner_id = func.value.id if isinstance(func.value, ast.Name) else None
+                if owner_id in builtins_aliases and func.attr in ("eval", "exec"):
+                    errors.append(
+                        f"Unsafe execution primitive '{owner_id}.{func.attr}()' in '{rel_path}' (line {lineno}): "
+                        "remove eval/exec and use explicit stdlib parsing (ast/json)."
+                    )
+                elif owner_id in os_aliases and func.attr == "system":
+                    errors.append(
+                        f"Unsafe execution primitive '{owner_id}.system()' in '{rel_path}' (line {lineno}): "
+                        "use subprocess.run([...], shell=False) or pure Python stdlib instead."
+                    )
+                elif owner_id in subprocess_aliases and any(
+                    kw.arg == "shell"
+                    and isinstance(kw.value, ast.Constant)
+                    and bool(kw.value.value) is True
+                    for kw in node.keywords
+                ):
+                    errors.append(
+                        f"Unsafe subprocess shell=True call '{owner_id}.{func.attr}(..., shell=True)' in '{rel_path}' (line {lineno}): "
+                        "pass an argument list with shell=False."
+                    )
+                elif owner_id in sys_aliases and func.attr == "exit":
+                    has_error_exit = True
+                elif func.attr == "error":
+                    has_error_exit = True
+
+    if not (uses_argparse or uses_sys_argv):
+        errors.append(
+            f"CLI contract missing in '{rel_path}': script must read CLI arguments via `argparse` or `sys.argv`."
+        )
+    if not has_error_exit:
+        errors.append(
+            f"CLI error exit handling missing in '{rel_path}': script must exit cleanly on errors via `sys.exit(...)`, `SystemExit`, `parser.error(...)`, or non-zero `return` in `main()`."
+        )
+
+
 def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
     """
     Executes objective, zero-token structural validation (Gate 1.5) on compiled artifacts.
@@ -334,7 +491,7 @@ def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
             )
             continue
         try:
-            ast.parse(script_src, filename=rel_path)
+            tree = ast.parse(script_src, filename=rel_path)
         except SyntaxError as exc:
             line_info = f"line {exc.lineno}" + (
                 f", col {exc.offset}" if exc.offset else ""
@@ -345,6 +502,8 @@ def validate_compiled_artifacts(state: Dict[str, Any]) -> Dict[str, Any]:
                 f"Python SyntaxError in '{rel_path}' ({line_info}: {exc.msg}{snippet}). "
                 f"Re-emit a syntactically valid Python 3 stdlib `### FILE: {rel_path}` block."
             )
+        else:
+            _lint_script_ast(rel_path, tree, errors)
 
     passed = len(errors) == 0
     correction_directive = (

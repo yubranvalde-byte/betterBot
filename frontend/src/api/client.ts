@@ -2,10 +2,13 @@ import type {
   BettyChatResponse,
   BettyHistoryResponse,
   BettyMode,
+  ContextAttachment,
+  EffortTier,
   HealthResponse,
   ImportSummary,
   NodeCompletePayload,
   NodeStartPayload,
+  RedTeamReport,
   SessionData,
   SessionSummary,
   StreamErrorPayload,
@@ -135,9 +138,21 @@ export async function listSessions(): Promise<SessionSummary[]> {
   return data.sessions || [];
 }
 
-export async function createSession(): Promise<SessionData> {
-  const res = await apiFetch('/api/sessions', { method: 'POST' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+export async function createSession(effortTier?: EffortTier): Promise<SessionData> {
+  const res = await apiFetch(
+    '/api/sessions',
+    effortTier
+      ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ effort_tier: effortTier }),
+        }
+      : { method: 'POST' },
+  );
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -178,6 +193,50 @@ export async function downloadSessionZip(
   return { blob, filename };
 }
 
+export async function runRedTeam(
+  sessionId: string,
+): Promise<{ report: RedTeamReport; session: SessionData }> {
+  const res = await apiFetch(`/api/sessions/${sessionId}/red-team`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uploadAttachment(
+  sessionId: string,
+  file: File,
+): Promise<{ attachment: ContextAttachment; session: SessionData }> {
+  const formData = new FormData();
+  formData.append('file', file);
+  const res = await apiFetch(`/api/sessions/${sessionId}/attachments`, {
+    method: 'POST',
+    body: formData,
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteAttachment(
+  sessionId: string,
+  attachmentId: string,
+): Promise<{ deleted: boolean; session: SessionData }> {
+  const res = await apiFetch(`/api/sessions/${sessionId}/attachments/${attachmentId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function getBettyHistory(): Promise<BettyHistoryResponse> {
   const res = await apiFetch('/api/betty/history');
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -188,13 +247,22 @@ export async function sendBettyChat(
   message: string,
   mode: BettyMode,
   sessionId: string | null,
+  effortTier?: EffortTier,
 ): Promise<BettyChatResponse> {
   const res = await apiFetch('/api/betty/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, mode, session_id: sessionId }),
+    body: JSON.stringify({
+      message,
+      mode,
+      session_id: sessionId,
+      ...(effortTier ? { effort_tier: effortTier } : {}),
+    }),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${res.status}`);
+  }
   return res.json();
 }
 
@@ -260,21 +328,40 @@ export async function streamSessionExecution(
   messageText: string,
   callbacks: StreamExecutionCallbacks,
   signal: AbortSignal,
+  effortTier?: EffortTier,
 ): Promise<void> {
   let targetSessionId = sessionId;
+  const payloadBody = JSON.stringify({
+    message: messageText,
+    mode: 'auto',
+    ...(effortTier ? { effort_tier: effortTier } : {}),
+  });
   let response = await apiFetch(`/api/sessions/${targetSessionId}/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message: messageText, mode: 'auto' }),
+    body: payloadBody,
     signal,
   });
 
   if (response.status === 404) {
-    const recovered = await apiFetch('/api/sessions', {
-      method: 'POST',
-      signal,
-    });
-    if (!recovered.ok) throw new Error(`HTTP ${recovered.status}`);
+    const recovered = await apiFetch(
+      '/api/sessions',
+      effortTier
+        ? {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ effort_tier: effortTier }),
+            signal,
+          }
+        : {
+            method: 'POST',
+            signal,
+          },
+    );
+    if (!recovered.ok) {
+      const errBody = await recovered.json().catch(() => ({}));
+      throw new Error((errBody as { detail?: string }).detail || `HTTP ${recovered.status}`);
+    }
     const newSession = (await recovered.json()) as SessionData;
     targetSessionId = newSession.session_id;
     callbacks.onRecoveredSession?.(newSession);
@@ -282,13 +369,14 @@ export async function streamSessionExecution(
     response = await apiFetch(`/api/sessions/${targetSessionId}/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: messageText, mode: 'auto' }),
+      body: payloadBody,
       signal,
     });
   }
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+    const errBody = await response.json().catch(() => ({}));
+    throw new Error((errBody as { detail?: string }).detail || `HTTP ${response.status}`);
   }
   if (!response.body) {
     throw new Error('ReadableStream not supported by response');

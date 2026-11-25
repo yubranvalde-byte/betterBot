@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,11 +26,15 @@ import main
 import storage
 from main import (
     FactoryState,
+    distill_attachment,
+    format_context_attachments,
     has_blueprint_xml,
+    invoke_red_team,
     node_adjudicator,
     node_construct,
     node_gate_1_5_linter,
     node_helper,
+    node_red_team_auto,
     node_upgrader,
     route_from_start,
 )
@@ -94,6 +98,148 @@ MAX_BETTY_WORKSPACES = int(os.environ.get("MAX_BETTY_WORKSPACES", "256") or 256)
 MAX_BETTY_MESSAGES = 80
 MAX_IMPORT_BYTES = 10 * 1024 * 1024
 MAX_IMPORT_SESSIONS = 200
+MAX_ATTACHMENTS_PER_SESSION = 4
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+ALLOWED_BINARY_ATTACHMENT_MIMES = frozenset(
+    {"application/pdf", "image/png", "image/jpeg", "image/webp"}
+)
+ALLOWED_BINARY_EXTENSIONS: Dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
+ALLOWED_TEXT_EXTENSIONS = frozenset(
+    {
+        ".txt",
+        ".md",
+        ".py",
+        ".ts",
+        ".tsx",
+        ".js",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".sql",
+        ".csv",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".html",
+        ".css",
+    }
+)
+
+
+def sanitize_attachment_filename(raw_name: str) -> str:
+    """Strips path separators/traversal/NULs from uploaded filenames and caps length."""
+    if not isinstance(raw_name, str):
+        return ""
+    cleaned = raw_name.replace("\x00", "").replace("\\", "/").split("/")[-1]
+    cleaned = re.sub(r"[\x00-\x1f\x7f]+", "", cleaned).strip()
+    if not cleaned or cleaned in (".", ".."):
+        return ""
+    if ".." in cleaned:
+        cleaned = cleaned.replace("..", "_")
+    if len(cleaned) > 120:
+        stem, dot, ext = cleaned.rpartition(".")
+        if dot and len(ext) <= 12:
+            cleaned = f"{stem[: 120 - len(ext) - 1]}.{ext}"
+        else:
+            cleaned = cleaned[:120]
+    return cleaned
+
+
+def _has_valid_binary_magic(mime_type: str, raw_bytes: bytes) -> bool:
+    if mime_type == "application/pdf":
+        return raw_bytes.startswith(b"%PDF-")
+    if mime_type == "image/png":
+        return raw_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+    if mime_type == "image/jpeg":
+        return raw_bytes.startswith(b"\xff\xd8\xff")
+    if mime_type == "image/webp":
+        return (
+            len(raw_bytes) >= 12
+            and raw_bytes[:4] == b"RIFF"
+            and raw_bytes[8:12] == b"WEBP"
+        )
+    return False
+
+
+def validate_attachment_upload(
+    raw_filename: str,
+    raw_content_type: str,
+    raw_bytes: bytes,
+    existing_count: int = 0,
+) -> Tuple[str, str]:
+    """
+    Validates attachment quota, byte size, filename, MIME/extension allowlist,
+    binary magic bytes, and UTF-8 text integrity without NUL bytes.
+    """
+    if existing_count >= MAX_ATTACHMENTS_PER_SESSION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Maximum {MAX_ATTACHMENTS_PER_SESSION} attachments per session reached",
+        )
+    if len(raw_bytes) > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Attachment exceeds 10 MB limit",
+        )
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    clean_name = sanitize_attachment_filename(raw_filename)
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Invalid attachment filename")
+
+    ext = Path(clean_name).suffix.lower()
+    content_type = (raw_content_type or "").split(";", 1)[0].strip().lower()
+
+    if ext in ALLOWED_BINARY_EXTENSIONS or content_type in ALLOWED_BINARY_ATTACHMENT_MIMES:
+        resolved_mime = ALLOWED_BINARY_EXTENSIONS.get(ext) or content_type
+        if resolved_mime not in ALLOWED_BINARY_ATTACHMENT_MIMES:
+            raise HTTPException(
+                status_code=415, detail=f"Unsupported binary MIME type: {resolved_mime}"
+            )
+        if ext and ext in ALLOWED_BINARY_EXTENSIONS and ALLOWED_BINARY_EXTENSIONS[ext] != resolved_mime:
+            raise HTTPException(
+                status_code=415, detail="File extension does not match MIME type"
+            )
+        if not _has_valid_binary_magic(resolved_mime, raw_bytes):
+            raise HTTPException(
+                status_code=415,
+                detail=f"Invalid or mismatched file header for {resolved_mime}",
+            )
+        return clean_name, resolved_mime
+
+    if ext in ALLOWED_TEXT_EXTENSIONS:
+        if b"\x00" in raw_bytes:
+            raise HTTPException(
+                status_code=415,
+                detail="Binary NUL bytes are not allowed in text/code uploads",
+            )
+        try:
+            raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise HTTPException(
+                status_code=415,
+                detail="Text/code attachment must be valid UTF-8",
+            )
+        resolved_text_mime = (
+            content_type if content_type.startswith("text/") else "text/plain"
+        )
+        return clean_name, resolved_text_mime
+
+    raise HTTPException(
+        status_code=415,
+        detail=f"Unsupported file type: {ext or content_type or 'unknown'}",
+    )
 
 SESSIONS: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -206,6 +352,23 @@ def _verify_master_key_value(candidate: str) -> Tuple[bool, bool]:
     return hmac.compare_digest(cleaned, configured_key), True
 
 
+def _enforce_effort_tier_auth(raw_tier: Optional[str], request: Request) -> str:
+    """
+    Validates `effort_tier` server-side and rejects `high`/`overkill` with 403 Forbidden
+    unless `X-Master-Key` matches the configured `MASTER_WORKSPACE_KEY` in constant time.
+    """
+    tier = main.normalize_effort_tier(raw_tier)
+    if tier in main.MASTER_ONLY_EFFORT_TIERS:
+        master_candidate = (request.headers.get("X-Master-Key") or "").strip()
+        authorized, configured = _verify_master_key_value(master_candidate)
+        if not configured or not authorized:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Effort tier '{tier}' requires Master Mode (valid X-Master-Key)",
+            )
+    return tier
+
+
 def resolve_owner_id(request: Request) -> str:
     master_candidate = (request.headers.get("X-Master-Key") or "").strip()
     if master_candidate:
@@ -283,10 +446,15 @@ def get_or_load_session(session_id: str, owner_id: str) -> Optional[Dict[str, An
     return None
 
 
+class CreateSessionRequest(BaseModel):
+    effort_tier: Optional[str] = None
+
+
 class UserMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=20000)
     mode: Optional[str] = "auto"  # "auto", "interview", "override"
     model_overrides: Optional[Dict[str, str]] = None
+    effort_tier: Optional[str] = None
 
 
 class RenameSessionRequest(BaseModel):
@@ -430,10 +598,13 @@ def create_new_session(
     owner_id: str,
     title: str = "סשן חדש",
     session_id: Optional[str] = None,
+    effort_tier: str = main.DEFAULT_EFFORT_TIER,
 ) -> Dict[str, Any]:
     session_id = session_id or uuid.uuid4().hex[:12]
     now = datetime.now().strftime("%H:%M:%S")
+    normalized_tier = main.normalize_effort_tier(effort_tier)
     state: FactoryState = main.make_initial_state()
+    state["effort_tier"] = normalized_tier
     session = {
         "session_id": session_id,
         "title": title,
@@ -446,6 +617,9 @@ def create_new_session(
         "slug_name": "",
         "needs_scripts": False,
         "is_repo_context": False,
+        "effort_tier": normalized_tier,
+        "red_team_report": None,
+        "context_attachments": [],
         "reference_files": {},
         "rubric_scores": {},
         "readiness_scores": {},
@@ -555,6 +729,26 @@ def enrich_session(session: Dict[str, Any]) -> Dict[str, Any]:
     )
     state["is_repo_context"] = is_repo_context
     session["is_repo_context"] = is_repo_context
+    raw_effort = (
+        state.get("effort_tier")
+        if "effort_tier" in state
+        else session.get("effort_tier")
+    )
+    effort_tier = main.normalize_effort_tier(raw_effort)
+    state["effort_tier"] = effort_tier
+    session["effort_tier"] = effort_tier
+    raw_rt_report = state.get("red_team_report") if "red_team_report" in state else session.get("red_team_report")
+    rt_report = raw_rt_report if isinstance(raw_rt_report, dict) else None
+    state["red_team_report"] = rt_report
+    session["red_team_report"] = rt_report
+    raw_atts = (
+        state.get("context_attachments")
+        if "context_attachments" in state
+        else session.get("context_attachments", [])
+    )
+    safe_atts = [a for a in raw_atts if isinstance(a, dict)] if isinstance(raw_atts, list) else []
+    state["context_attachments"] = safe_atts
+    session["context_attachments"] = safe_atts
     session["rubric_scores"] = state.get("rubric_scores") or session.get("rubric_scores") or {}
     session["readiness_scores"] = state.get("readiness_scores") or session.get("readiness_scores") or {}
     session["model_telemetry"] = state.get("model_telemetry") or session.get("model_telemetry") or {}
@@ -645,8 +839,11 @@ async def health_check():
         "model": main.FAST_MODEL,
         "fast_model": main.FAST_MODEL,
         "compiler_model": main.COMPILER_MODEL,
+        "heavy_model": main.HEAVY_MODEL,
         "fallback_model": main.FALLBACK_MODEL,
         "decision_model": main.DECISION_MODEL,
+        "effort_profiles": list(main.VALID_EFFORT_TIERS),
+        "master_only_effort_tiers": sorted(main.MASTER_ONLY_EFFORT_TIERS),
         "routing": main.get_model_routing_summary(),
         "active_sessions": active_count,
     }
@@ -730,8 +927,15 @@ async def list_sessions(owner_id: str = Depends(resolve_owner_id)):
 
 
 @app.post("/api/sessions")
-async def create_session_endpoint(owner_id: str = Depends(resolve_owner_id)):
-    session = await asyncio.to_thread(create_new_session, owner_id=owner_id)
+async def create_session_endpoint(
+    request: Request,
+    req: Optional[CreateSessionRequest] = Body(default=None),
+    owner_id: str = Depends(resolve_owner_id),
+):
+    tier = _enforce_effort_tier_auth(req.effort_tier if req else None, request)
+    session = await asyncio.to_thread(
+        create_new_session, owner_id=owner_id, effort_tier=tier
+    )
     return enrich_session(session)
 
 
@@ -1012,6 +1216,8 @@ async def stream_factory_execution(
     so the UI can animate each node (Helper -> Construct -> Adjudicator <-> Upgrader).
     """
     _enforce_rate_limit(request, "stream", 20, 60.0, identity=owner_id)
+    if req.effort_tier is not None:
+        _enforce_effort_tier_auth(req.effort_tier, request)
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
@@ -1041,6 +1247,13 @@ async def stream_factory_execution(
             session["title"] = user_msg[:36] + ("..." if len(user_msg) > 36 else "")
 
         state: FactoryState = session["state"]
+        effective_raw_tier = (
+            req.effort_tier if req.effort_tier is not None else state.get("effort_tier")
+        )
+        effective_tier = _enforce_effort_tier_auth(effective_raw_tier, request)
+        state["effort_tier"] = effective_tier
+        session["effort_tier"] = effective_tier
+
         if req.model_overrides is not None:
             sanitized_overrides = main.sanitize_model_overrides(req.model_overrides)
             if sanitized_overrides:
@@ -1126,6 +1339,7 @@ async def stream_factory_execution(
                         "gate_1_5_linter": ("Gate 1.5: Structural Linter", "מאמת מבנה YAML, הפניות וקובצי חבילה (0 טוקנים)..."),
                         "node_3_upgrader": ("Node 3: The Upgrader", "מבצע ניתוח השפעה ומשדרג את ה-Blueprint והתוצר..."),
                         "node_4_adjudicator": ("Node 4: The Adjudicator", "מבצע ביקורת איכות (QA) ובדיקת רגרסיה..."),
+                        "node_red_team_auto": ("⚔️ Red-Team Auto-Audit", "מבצע תקיפת קצה אוטומטית (Overkill) לאיתור כשלים סמויים..."),
                     }
                     label_title, label_desc = node_labels.get(current_node, (current_node, "מבצע פעולה..."))
                     routing_plan = main.get_node_routing_plan(current_node, state)
@@ -1139,6 +1353,7 @@ async def stream_factory_execution(
                             "iteration": state.get("iteration_count", 0),
                             "model": routing_plan["model"],
                             "thinking_level": routing_plan["thinking_level"],
+                            "effort_tier": routing_plan.get("effort_tier", effective_tier),
                         },
                     )
                     await asyncio.sleep(0)
@@ -1333,6 +1548,30 @@ async def stream_factory_execution(
                                     node_tel,
                                 )
                             )
+                    elif current_node == "node_red_team_auto":
+                        session["status"] = "compiling"
+                        update = await asyncio.to_thread(node_red_team_auto, copy.deepcopy(state))
+                        _apply_node_update(state, update)
+                        node_tel = (update.get("model_telemetry") or {}).get("node_red_team_auto") or {}
+                        rt_rep = state.get("red_team_report") or {}
+                        rt_verdict = rt_rep.get("verdict", "NEEDS_HARDENING")
+                        rt_findings = rt_rep.get("findings") or []
+
+                        session["timeline"].append(
+                            _attach_timeline_telemetry(
+                                {
+                                    "id": str(uuid.uuid4())[:8],
+                                    "timestamp": step_time,
+                                    "node": "node_red_team_auto",
+                                    "title": f"⚔️ Red-Team Auto-Audit: {rt_verdict}",
+                                    "detail": (
+                                        f"{rt_rep.get('summary', '')} ({len(rt_findings)} ממצאים)"
+                                    ).strip(),
+                                    "status": "success" if rt_verdict == "PRODUCTION_READY" else "warning",
+                                },
+                                node_tel,
+                            )
+                        )
                     else:
                         break
 
@@ -1439,6 +1678,185 @@ async def stream_factory_execution(
                 session_lock.release()
 
 
+@app.post("/api/sessions/{session_id}/red-team")
+async def red_team_session_endpoint(
+    session_id: str,
+    request: Request,
+    owner_id: str = Depends(resolve_owner_id),
+):
+    """
+    Runs an on-demand, read-only Adversarial Red-Team & Harden audit against the
+    compiled artifact(s) without mutating `champion_prompt` or `reference_files`.
+    """
+    _enforce_rate_limit(request, "red-team", 10, 60.0, identity=owner_id)
+
+    cache_key = (owner_id, session_id)
+    session_lock = _get_session_lock(cache_key)
+    if session_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Session already has an active execution stream",
+        )
+
+    await session_lock.acquire()
+    try:
+        session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        state: FactoryState = session["state"]
+        _enforce_effort_tier_auth(state.get("effort_tier"), request)
+
+        has_compiled = bool(
+            (state.get("champion_prompt") or "").strip()
+            or (state.get("challenger_prompt") or "").strip()
+            or (state.get("reference_files") or {})
+        )
+        if not has_compiled:
+            raise HTTPException(
+                status_code=400,
+                detail="No compiled artifact exists yet to Red-Team",
+            )
+
+        report = await asyncio.to_thread(invoke_red_team, copy.deepcopy(state))
+        state["red_team_report"] = report
+        session["red_team_report"] = report
+
+        step_time = datetime.now().strftime("%H:%M:%S")
+        session["updated_at"] = step_time
+        findings_count = len(report.get("findings") or [])
+        verdict = report.get("verdict", "NEEDS_HARDENING")
+        session["timeline"].append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": step_time,
+                "node": "node_red_team_auto",
+                "title": f"⚔️ Red-Team Audit: {verdict}",
+                "detail": f"{report.get('summary', '')} ({findings_count} ממצאים)".strip(),
+                "status": "success" if verdict == "PRODUCTION_READY" else "warning",
+                "model": report.get("model"),
+                "thinking_level": report.get("thinking_level"),
+                "latency_ms": report.get("latency_ms"),
+            }
+        )
+
+        enriched = enrich_session(session)
+        await asyncio.to_thread(save_session_record, owner_id, session_id)
+        return {"report": report, "session": enriched}
+    finally:
+        if session_lock.locked():
+            session_lock.release()
+
+
+@app.post("/api/sessions/{session_id}/attachments")
+async def upload_session_attachment(
+    session_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    owner_id: str = Depends(resolve_owner_id),
+):
+    """
+    Ingests an uploaded PDF, image, or text/code file using Ingest-Once Distillation
+    and stores only the compact digest + metadata inside `state['context_attachments']`.
+    """
+    _enforce_rate_limit(request, "attachments", 15, 60.0, identity=owner_id)
+
+    cache_key = (owner_id, session_id)
+    session_lock = _get_session_lock(cache_key)
+    if session_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Session already has an active execution stream",
+        )
+
+    await session_lock.acquire()
+    try:
+        session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        state: FactoryState = session["state"]
+        existing = list(state.get("context_attachments") or [])
+        if len(existing) >= MAX_ATTACHMENTS_PER_SESSION:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Maximum {MAX_ATTACHMENTS_PER_SESSION} attachments per session reached",
+            )
+
+        raw_bytes = await file.read(MAX_ATTACHMENT_BYTES + 1)
+        clean_name, resolved_mime = validate_attachment_upload(
+            file.filename or "",
+            file.content_type or "",
+            raw_bytes,
+            existing_count=len(existing),
+        )
+
+        attachment = await asyncio.to_thread(
+            distill_attachment, clean_name, resolved_mime, raw_bytes
+        )
+        del raw_bytes
+
+        updated_attachments = existing + [attachment]
+        state["context_attachments"] = updated_attachments
+        session["context_attachments"] = updated_attachments
+        session["updated_at"] = datetime.now().strftime("%H:%M:%S")
+        session["timeline"].append(
+            {
+                "id": str(uuid.uuid4())[:8],
+                "timestamp": session["updated_at"],
+                "node": "system",
+                "title": f"קובץ הקשר צורף ({attachment['mode']})",
+                "detail": f"{clean_name} ({attachment['size_bytes']} bytes)",
+                "status": "info",
+            }
+        )
+
+        enriched = enrich_session(session)
+        await asyncio.to_thread(save_session_record, owner_id, session_id)
+        return {"attachment": attachment, "session": enriched}
+    finally:
+        await file.close()
+        if session_lock.locked():
+            session_lock.release()
+
+
+@app.delete("/api/sessions/{session_id}/attachments/{attachment_id}")
+async def delete_session_attachment(
+    session_id: str,
+    attachment_id: str,
+    owner_id: str = Depends(resolve_owner_id),
+):
+    cache_key = (owner_id, session_id)
+    session_lock = _get_session_lock(cache_key)
+    if session_lock.locked():
+        raise HTTPException(
+            status_code=409,
+            detail="Session already has an active execution stream",
+        )
+
+    await session_lock.acquire()
+    try:
+        session = await asyncio.to_thread(get_or_load_session, session_id, owner_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        state: FactoryState = session["state"]
+        existing = list(state.get("context_attachments") or [])
+        filtered = [a for a in existing if str(a.get("id") or "") != attachment_id]
+        if len(filtered) == len(existing):
+            raise HTTPException(status_code=404, detail="Attachment not found")
+
+        state["context_attachments"] = filtered
+        session["context_attachments"] = filtered
+        session["updated_at"] = datetime.now().strftime("%H:%M:%S")
+        enriched = enrich_session(session)
+        await asyncio.to_thread(save_session_record, owner_id, session_id)
+        return {"deleted": True, "session": enriched}
+    finally:
+        if session_lock.locked():
+            session_lock.release()
+
+
 # ==========================================
 # Betty (בטי) — Floating Assistant Endpoints
 # ==========================================
@@ -1510,6 +1928,7 @@ class BettyChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=12000)
     mode: str = "tech_support"  # "tech_support" | "prompt_advisor"
     session_id: Optional[str] = Field(default=None, max_length=128)
+    effort_tier: Optional[str] = None
 
 
 class BettyClearRequest(BaseModel):
@@ -1533,6 +1952,7 @@ def build_session_context_for_betty(session_id: Optional[str], owner_id: str) ->
         f"Target Type: {sess.get('target_type', 'SYSTEM_PROMPT')}",
         f"Slug Name: {sess.get('slug_name') or 'N/A'}",
         f"Current Status: {sess.get('status')} (Active Node: {sess.get('active_node')})",
+        f"Effort Tier: {sess.get('effort_tier', main.DEFAULT_EFFORT_TIER)}",
         f"QA Iteration Count: {st.get('iteration_count', 0)} / {getattr(main, 'MAX_QA_ITERATIONS', 2)}",
         f"Model Routing: Helper/Betty={main.HELPER_MODEL}(low), Construct/Upgrader={main.CONSTRUCT_MODEL}(med/low), Adjudicator={main.ADJUDICATOR_MODEL}(low), Fallback={main.FALLBACK_MODEL}, Decision={main.DECISION_MODEL}",
     ]
@@ -1578,6 +1998,24 @@ def build_session_context_for_betty(session_id: Optional[str], owner_id: str) ->
             lines.append(f"Auxiliary Reference Files (Progressive Disclosure): {ref_summary}")
     if st.get("error_log"):
         lines.append("QA Error Log:\n" + "\n".join(st["error_log"][-4:]))
+    att_ctx = format_context_attachments(st, max_chars=6000)
+    if att_ctx:
+        lines.append(att_ctx)
+    rt_report = sess.get("red_team_report") or st.get("red_team_report")
+    if isinstance(rt_report, dict) and rt_report:
+        lines.append(
+            f"Red-Team Audit Verdict: {rt_report.get('verdict', 'N/A')} — {rt_report.get('summary', '')}"
+        )
+        rt_findings = rt_report.get("findings") or []
+        if rt_findings:
+            finding_lines = [
+                f"  - [{f.get('severity', 'High')}] {f.get('target_file', 'SKILL.md')}: "
+                f"{f.get('title', '')} | Evidence: {f.get('evidence', '')} | Fix: {f.get('fix', '')}"
+                for f in rt_findings[:5]
+                if isinstance(f, dict)
+            ]
+            if finding_lines:
+                lines.append("Red-Team Findings:\n" + "\n".join(finding_lines))
     lines.append("</current_session_context>")
     return "\n".join(lines)
 
@@ -1663,10 +2101,25 @@ async def betty_chat_endpoint(
     owner_id: str = Depends(resolve_owner_id),
 ):
     _enforce_rate_limit(request, "betty", 30, 60.0, identity=owner_id)
+    if req.effort_tier is not None:
+        _enforce_effort_tier_auth(req.effort_tier, request)
     mode = req.mode if req.mode in ["tech_support", "prompt_advisor"] else "tech_support"
     user_msg = req.message.strip()
     if not user_msg:
         raise HTTPException(status_code=400, detail="Empty message")
+
+    session_tier: Optional[str] = None
+    if req.session_id:
+        loaded_sess = await asyncio.to_thread(get_or_load_session, req.session_id, owner_id)
+        if loaded_sess:
+            session_tier = (
+                (loaded_sess.get("state") or {}).get("effort_tier")
+                or loaded_sess.get("effort_tier")
+            )
+    effective_tier = _enforce_effort_tier_auth(
+        req.effort_tier if req.effort_tier is not None else session_tier,
+        request,
+    )
 
     now = datetime.now().strftime("%H:%M:%S")
     with _CACHE_LOCK:
@@ -1707,7 +2160,9 @@ async def betty_chat_endpoint(
     lc_messages.append(HumanMessage(content=user_msg))
 
     try:
-        response, betty_tel = await asyncio.to_thread(main.invoke_betty, lc_messages)
+        response, betty_tel = await asyncio.to_thread(
+            main.invoke_betty, lc_messages, None, effective_tier
+        )
         content_str = main._normalize_content(response.content)
 
         parsed = parse_betty_response(content_str)

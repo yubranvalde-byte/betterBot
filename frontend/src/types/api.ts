@@ -4,6 +4,8 @@ export type TargetType =
   | 'HYBRID_BUNDLE'
   | 'SKILL_SUITE';
 
+export type EffortTier = 'low' | 'medium' | 'high' | 'overkill';
+
 export type SessionStatus =
   | 'idle'
   | 'interviewing'
@@ -16,7 +18,39 @@ export type NodeId =
   | 'node_2_construct'
   | 'gate_1_5_linter'
   | 'node_3_upgrader'
-  | 'node_4_adjudicator';
+  | 'node_4_adjudicator'
+  | 'node_red_team_auto';
+
+export interface RedTeamFinding {
+  id: string;
+  severity: 'Critical' | 'High' | 'Medium';
+  target_file: string;
+  title: string;
+  evidence: string;
+  fix: string;
+}
+
+export interface RedTeamReport {
+  verdict: 'PRODUCTION_READY' | 'NEEDS_HARDENING';
+  summary: string;
+  findings: RedTeamFinding[];
+  patch_directive: string;
+  parse_error?: boolean;
+  model?: string;
+  thinking_level?: string;
+  effort_tier?: EffortTier;
+  latency_ms?: number;
+}
+
+export interface ContextAttachment {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  mode: 'verbatim' | 'distilled';
+  digest: string;
+  created_at: string;
+}
 
 export type ViewId =
   | 'view-interview'
@@ -51,9 +85,12 @@ export interface RubricScores {
   progressive_disclosure?: number;
   actionable_clarity?: number;
   output_contract_strength?: number;
+  operational_resilience?: number | null;
+  script_rigor_and_parity?: number | null;
   trigger_deconfliction?: number | null;
   challenger_beats_champion?: number;
   weighted_average?: number;
+  [key: string]: number | boolean | null | undefined;
 }
 
 export interface ModelTelemetryEntry {
@@ -64,6 +101,7 @@ export interface ModelTelemetryEntry {
   fallback_used?: boolean;
   fallback_from?: string | null;
   fast_path?: string;
+  effort_tier?: EffortTier;
   latency_ms?: number;
 }
 
@@ -105,11 +143,15 @@ export interface FactoryState {
   slug_name: string;
   needs_scripts?: boolean;
   is_repo_context?: boolean;
+  effort_tier?: EffortTier;
   reference_files: Record<string, string>;
   rubric_scores: RubricScores;
   readiness_scores: ReadinessScores;
   model_telemetry: Record<string, ModelTelemetryEntry>;
   model_overrides?: Record<string, string>;
+  red_team_report?: RedTeamReport | null;
+  red_team_auto_ran?: boolean;
+  context_attachments?: ContextAttachment[];
 }
 
 export interface SessionData {
@@ -126,6 +168,7 @@ export interface SessionData {
   slug_name: string;
   needs_scripts?: boolean;
   is_repo_context?: boolean;
+  effort_tier?: EffortTier;
   reference_files: Record<string, string>;
   rubric_scores: RubricScores;
   readiness_scores: ReadinessScores;
@@ -138,6 +181,8 @@ export interface SessionData {
   diff_champion?: string;
   diff_challenger?: string;
   compilation_check: string;
+  red_team_report?: RedTeamReport | null;
+  context_attachments?: ContextAttachment[];
   chat_history: ChatMessage[];
   timeline: TimelineItem[];
 }
@@ -214,6 +259,7 @@ export interface NodeStartPayload {
   iteration: number;
   model?: string;
   thinking_level?: string;
+  effort_tier?: EffortTier;
 }
 
 export interface NodeCompletePayload {

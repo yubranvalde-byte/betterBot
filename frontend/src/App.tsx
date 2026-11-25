@@ -3,6 +3,7 @@ import {
   clearBettyHistory,
   clearStoredMasterKey,
   createSession,
+  deleteAttachment,
   deleteSession,
   downloadSessionZip,
   exportWorkspace,
@@ -14,10 +15,12 @@ import {
   importWorkspace,
   listSessions,
   renameSession,
+  runRedTeam,
   sendBettyChat,
   setStoredMasterKey,
   STORAGE_KEYS,
   streamSessionExecution,
+  uploadAttachment,
   verifyMasterKey,
 } from './api/client';
 import {
@@ -38,6 +41,7 @@ import type {
   BettyMessage,
   BettyMode,
   DiffMode,
+  EffortTier,
   HealthRoutingNode,
   NodeId,
   SessionData,
@@ -72,6 +76,7 @@ function getStageLabelForNode(nodeId: NodeId, session: SessionData | null): stri
     gate_1_5_linter: 'Gate 1.5',
     node_4_adjudicator: 'שלב 3/4',
     node_3_upgrader: 'שלב 4/4',
+    node_red_team_auto: '⚔️ Red-Team',
   };
   const base = stageMap[nodeId] || 'פעיל';
   const iter = session?.state?.iteration_count || 0;
@@ -95,8 +100,11 @@ export function App() {
   const [activeArtifactTab, setActiveArtifactTab] = useState<ArtifactTab>('prompt');
   const [activeArtifactFile, setActiveArtifactFile] = useState<string>(PRIMARY_FILE_KEY);
   const [diffMode, setDiffMode] = useState<DiffMode>('unified');
+  const [effortTier, setEffortTier] = useState<EffortTier>('medium');
 
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isRedTeaming, setIsRedTeaming] = useState(false);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const [activeStreamingNode, setActiveStreamingNode] = useState<NodeId | null>(null);
   const [activeStreamingDesc, setActiveStreamingDesc] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(null);
@@ -191,13 +199,24 @@ export function App() {
     return list;
   }, []);
 
-  const applySession = useCallback((sess: SessionData) => {
-    setCurrentSession(sess);
-    if (sess.session_id) {
-      localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, sess.session_id);
-    }
-    setActiveArtifactFile((prev) => resolveActiveArtifactFile(sess, prev));
-  }, []);
+  const applySession = useCallback(
+    (sess: SessionData) => {
+      setCurrentSession(sess);
+      if (sess.session_id) {
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, sess.session_id);
+      }
+      setActiveArtifactFile((prev) => resolveActiveArtifactFile(sess, prev));
+      const rawTier = sess.effort_tier || sess.state?.effort_tier || 'medium';
+      const validTier: EffortTier =
+        rawTier === 'low' || rawTier === 'medium' || rawTier === 'high' || rawTier === 'overkill'
+          ? rawTier
+          : 'medium';
+      const unlockedTier =
+        (validTier === 'high' || validTier === 'overkill') && !isMasterMode ? 'medium' : validTier;
+      setEffortTier(unlockedTier);
+    },
+    [isMasterMode],
+  );
 
   const loadSessionById = useCallback(
     async (sessionId: string, closeDrawer = true) => {
@@ -354,7 +373,11 @@ export function App() {
   const handleCreateNewSession = useCallback(async () => {
     if (isStreaming) return;
     try {
-      const fresh = await createSession();
+      const requestedTier: EffortTier =
+        (effortTier === 'high' || effortTier === 'overkill') && !isMasterMode
+          ? 'medium'
+          : effortTier;
+      const fresh = await createSession(requestedTier);
       setExecutionBanner(INITIAL_BANNER);
       setNotifications({});
       setActiveArtifactFile(PRIMARY_FILE_KEY);
@@ -364,7 +387,7 @@ export function App() {
     } catch (err) {
       showToast(`שגיאה ביצירת סשן חדש: ${(err as Error).message}`, 'alert');
     }
-  }, [isStreaming, applySession, refreshSessionsList, navigateView, showToast]);
+  }, [isStreaming, effortTier, isMasterMode, applySession, refreshSessionsList, navigateView, showToast]);
 
   const handleRenameSession = useCallback(
     async (sessionId: string, nextTitle: string): Promise<boolean> => {
@@ -550,6 +573,7 @@ export function App() {
             },
           },
           controller.signal,
+          effortTier,
         );
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
@@ -594,6 +618,7 @@ export function App() {
     },
     [
       isStreaming,
+      effortTier,
       applySession,
       navigateView,
       refreshSessionsList,
@@ -605,6 +630,76 @@ export function App() {
   const handleStopStream = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);
+
+  const handleRunRedTeam = useCallback(async () => {
+    const activeSess = currentSessionRef.current;
+    if (!activeSess?.session_id || isStreaming || isRedTeaming) return;
+    setIsRedTeaming(true);
+    try {
+      const res = await runRedTeam(activeSess.session_id);
+      applySession(res.session);
+      await refreshSessionsList().catch(() => {});
+      if (res.report.verdict === 'PRODUCTION_READY') {
+        showToast('Red-Team: החבילה מוכנה לייצור (PRODUCTION_READY)', 'check');
+      } else {
+        showToast(
+          `Red-Team זיהה ${res.report.findings?.length ?? 0} ממצאים לחיזוק`,
+          'alert',
+        );
+      }
+    } catch (err) {
+      showToast(`שגיאה בהרצת Red-Team: ${(err as Error).message}`, 'alert');
+    } finally {
+      setIsRedTeaming(false);
+    }
+  }, [isStreaming, isRedTeaming, applySession, refreshSessionsList, showToast]);
+
+  const handleUploadAttachment = useCallback(
+    async (file: File) => {
+      if (isStreaming || isUploadingAttachment) return;
+      setIsUploadingAttachment(true);
+      try {
+        let targetSessionId = currentSessionRef.current?.session_id;
+        if (!targetSessionId) {
+          const requestedTier: EffortTier =
+            (effortTier === 'high' || effortTier === 'overkill') && !isMasterMode
+              ? 'medium'
+              : effortTier;
+          const fresh = await createSession(requestedTier);
+          applySession(fresh);
+          await refreshSessionsList().catch(() => {});
+          targetSessionId = fresh.session_id;
+        }
+        const res = await uploadAttachment(targetSessionId, file);
+        applySession(res.session);
+        await refreshSessionsList().catch(() => {});
+        showToast(
+          `הקובץ ${res.attachment.filename} צורף (${res.attachment.mode === 'distilled' ? 'Distilled' : 'Verbatim'})`,
+          'check',
+        );
+      } catch (err) {
+        showToast(`שגיאה בצירוף הקובץ: ${(err as Error).message}`, 'alert');
+      } finally {
+        setIsUploadingAttachment(false);
+      }
+    },
+    [isStreaming, isUploadingAttachment, effortTier, isMasterMode, applySession, refreshSessionsList, showToast],
+  );
+
+  const handleDeleteAttachment = useCallback(
+    async (attachmentId: string) => {
+      const sid = currentSessionRef.current?.session_id;
+      if (!sid || isStreaming || isUploadingAttachment) return;
+      try {
+        const res = await deleteAttachment(sid, attachmentId);
+        applySession(res.session);
+        showToast('קובץ ההקשר הוסר', 'trash');
+      } catch (err) {
+        showToast(`שגיאה בהסרת הקובץ: ${(err as Error).message}`, 'alert');
+      }
+    },
+    [isStreaming, isUploadingAttachment, applySession, showToast],
+  );
 
   const handleDownloadZip = useCallback(async () => {
     if (!currentSession?.session_id) return;
@@ -720,6 +815,7 @@ export function App() {
     }
     clearStoredMasterKey();
     setIsMasterMode(false);
+    setEffortTier((prev) => (prev === 'high' || prev === 'overkill' ? 'medium' : prev));
     setIsSyncModalOpen(false);
     await reloadWorkspaceState(true);
     showToast('חזרת למרחב העבודה האנונימי המבודד', 'check');
@@ -751,6 +847,7 @@ export function App() {
           text,
           mode,
           currentSessionRef.current?.session_id || null,
+          effortTier,
         );
         if (data.history) {
           setBettyHistories((prev) => ({
@@ -776,7 +873,7 @@ export function App() {
         setIsBettyLoading(false);
       }
     },
-    [bettyMode, isBettyLoading],
+    [bettyMode, isBettyLoading, effortTier],
   );
 
   const handleClearBetty = useCallback(
@@ -805,6 +902,7 @@ export function App() {
         isStreaming={isStreaming}
         activeStreamingNode={activeStreamingNode}
         isMasterMode={isMasterMode}
+        effortTier={effortTier}
         isBettyOpen={isBettyOpen}
         isHistoryOpen={isHistoryOpen}
         notifications={notifications}
@@ -826,9 +924,16 @@ export function App() {
             <InterviewView
               session={currentSession}
               isStreaming={isStreaming}
+              isUploadingAttachment={isUploadingAttachment}
               activeStreamingNode={activeStreamingNode}
               activeStreamingDesc={activeStreamingDesc}
               pendingUserMessage={pendingUserMessage}
+              effortTier={effortTier}
+              isMasterMode={isMasterMode}
+              onChangeEffortTier={setEffortTier}
+              onRequestMasterUnlock={handleOpenSyncModal}
+              onUploadAttachment={handleUploadAttachment}
+              onDeleteAttachment={handleDeleteAttachment}
               onSendMessage={handleSendMessage}
               onNavigateView={navigateView}
               onShowToast={showToast}
@@ -843,9 +948,11 @@ export function App() {
               activeFile={activeArtifactFile}
               onChangeFile={setActiveArtifactFile}
               isStreaming={isStreaming}
+              isRedTeaming={isRedTeaming}
               activeStreamingNode={activeStreamingNode}
               activeStreamingDesc={activeStreamingDesc}
               onRunUpgrader={handleSendMessage}
+              onRunRedTeam={handleRunRedTeam}
               onDownloadZip={handleDownloadZip}
               onNavigateToQa={() => navigateView('view-qa')}
               onShowToast={showToast}
@@ -858,7 +965,17 @@ export function App() {
               diffMode={diffMode}
               onChangeDiffMode={setDiffMode}
               isStreaming={isStreaming}
+              isRedTeaming={isRedTeaming}
+              isUploadingAttachment={isUploadingAttachment}
+              effortTier={effortTier}
+              isMasterMode={isMasterMode}
+              onChangeEffortTier={setEffortTier}
+              onRequestMasterUnlock={handleOpenSyncModal}
+              onUploadAttachment={handleUploadAttachment}
+              onDeleteAttachment={handleDeleteAttachment}
               onRunUpgrader={handleSendMessage}
+              onRunRedTeam={handleRunRedTeam}
+              onShowToast={showToast}
             />
           )}
 
