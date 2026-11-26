@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>BetterBot — Neo-Optical Agent &amp; Skill Studio</title>
+    <script>
+      (function () {
+        try {
+          var saved = localStorage.getItem('betterbot_theme');
+          var isDark = saved
+            ? saved === 'dark'
+            : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          if (isDark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

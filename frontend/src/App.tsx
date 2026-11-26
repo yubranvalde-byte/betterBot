@@ -101,6 +101,16 @@ export function App() {
   const [activeArtifactFile, setActiveArtifactFile] = useState<string>(PRIMARY_FILE_KEY);
   const [diffMode, setDiffMode] = useState<DiffMode>('unified');
   const [effortTier, setEffortTier] = useState<EffortTier>('medium');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.THEME);
+    if (saved === 'light' || saved === 'dark') return saved;
+    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    localStorage.setItem(STORAGE_KEYS.THEME, theme);
+  }, [theme]);
 
   const [isStreaming, setIsStreaming] = useState(false);
   const [isRedTeaming, setIsRedTeaming] = useState(false);
@@ -903,12 +913,14 @@ export function App() {
         activeStreamingNode={activeStreamingNode}
         isMasterMode={isMasterMode}
         effortTier={effortTier}
+        theme={theme}
         isBettyOpen={isBettyOpen}
         isHistoryOpen={isHistoryOpen}
         notifications={notifications}
         onToggleHistory={() => setIsHistoryOpen((v) => !v)}
         onNewSession={handleCreateNewSession}
         onOpenSyncModal={handleOpenSyncModal}
+        onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
         onToggleBetty={() => setIsBettyOpen((v) => !v)}
       />
 

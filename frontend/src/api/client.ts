@@ -20,6 +20,7 @@ export const STORAGE_KEYS = {
   WORKSPACE_ID: 'betterbot_workspace_id',
   MASTER_KEY: 'betterbot_master_key',
   BETTY_DOCKED_WIDTH: 'betterbot_betty_docked_width',
+  THEME: 'betterbot_theme',
 } as const;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

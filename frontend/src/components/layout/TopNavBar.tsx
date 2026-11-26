@@ -1,4 +1,4 @@
-import { CaretDown, ClockCounterClockwise, Key, Plus } from '@phosphor-icons/react';
+import { CaretDown, ClockCounterClockwise, Key, Moon, Plus, Sun } from '@phosphor-icons/react';
 import { motion } from 'motion/react';
 import type { EffortTier, NodeId, SessionData, ViewId } from '../../types/api';
 import { getBestPrompt } from '../../utils/artifacts';
@@ -15,12 +15,14 @@ interface TopNavBarProps {
   activeStreamingNode: NodeId | null;
   isMasterMode: boolean;
   effortTier: EffortTier;
+  theme: 'light' | 'dark';
   isBettyOpen: boolean;
   isHistoryOpen: boolean;
   notifications: Partial<Record<ViewId, 'info' | 'pass' | 'escalate'>>;
   onToggleHistory: () => void;
   onNewSession: () => void;
   onOpenSyncModal: () => void;
+  onToggleTheme: () => void;
   onToggleBetty: () => void;
 }
 
@@ -40,12 +42,14 @@ export function TopNavBar({
   activeStreamingNode,
   isMasterMode,
   effortTier,
+  theme,
   isBettyOpen,
   isHistoryOpen,
   notifications,
   onToggleHistory,
   onNewSession,
   onOpenSyncModal,
+  onToggleTheme,
   onToggleBetty,
 }: TopNavBarProps) {
   const rawTitle = currentSession?.title || 'סוכן חדש';
@@ -353,6 +357,21 @@ export function TopNavBar({
               <span className="hidden min-[400px]:inline">
                 {isMasterMode ? 'MASTER' : 'סנכרון'}
               </span>
+            </button>
+          </Tooltip>
+
+          <Tooltip content={theme === 'dark' ? 'עבור למצב בהיר' : 'עבור למצב כהה'} placement="bottom">
+            <button
+              type="button"
+              onClick={onToggleTheme}
+              aria-label={theme === 'dark' ? 'מצב בהיר' : 'מצב כהה'}
+              className="prism-interactive h-8 w-8 rounded-md border border-hairline bg-surface text-ink inline-flex items-center justify-center shrink-0 cursor-pointer"
+            >
+              {theme === 'dark' ? (
+                <Sun size={15} weight="bold" className="text-amber" />
+              ) : (
+                <Moon size={15} weight="bold" className="text-slate-ink" />
+              )}
             </button>
           </Tooltip>
 

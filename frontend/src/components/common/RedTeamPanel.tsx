@@ -71,7 +71,7 @@ export function RedTeamPanel({ report, isStreaming, onHarden }: RedTeamPanelProp
     <section className="rounded-[14px] border border-hairline bg-white/85 backdrop-blur-md shadow-xs overflow-hidden">
       <div className="px-5 py-4 border-b border-hairline flex flex-wrap items-center justify-between gap-3 bg-porcelain/60">
         <div className="flex items-center gap-2.5">
-          <span className="w-7 h-7 rounded-lg bg-obsidian text-white inline-flex items-center justify-center shrink-0">
+          <span className="w-7 h-7 rounded-lg btn-obsidian inline-flex items-center justify-center shrink-0">
             <Sword size={15} weight="bold" />
           </span>
           <div>

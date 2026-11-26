@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "diff2html/bundles/css/diff2html.min.css";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   /* Porcelain Surfaces & Layered Depth */
@@ -43,6 +44,30 @@
   --radius-lg: 14px;
 }
 
+html.dark {
+  color-scheme: dark;
+  --color-porcelain: #0B0D12;
+  --color-surface: #12151E;
+  --color-recessed: #1A1E2B;
+  --color-hover: #232838;
+
+  --color-obsidian: #F1F5F9;
+  --color-obsidian-hover: #E2E8F0;
+  --color-ink: #E6EAF2;
+  --color-slate-ink: #9AA3B5;
+  --color-muted: #6E778A;
+
+  --color-hairline: rgba(255, 255, 255, 0.09);
+  --color-hairline-strong: rgba(255, 255, 255, 0.16);
+
+  --color-emerald: #34D399;
+  --color-emerald-tint: rgba(16, 185, 129, 0.14);
+  --color-amber: #FBBF24;
+  --color-amber-tint: rgba(245, 158, 11, 0.14);
+  --color-crimson: #F87171;
+  --color-crimson-tint: rgba(239, 68, 68, 0.14);
+}
+
 @layer base {
   html, body {
     background-color: var(--color-porcelain);
@@ -68,6 +93,15 @@
   }
   *::-webkit-scrollbar-thumb:hover {
     background-color: rgba(17, 18, 22, 0.28);
+  }
+  html.dark * {
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+  html.dark *::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.18);
+  }
+  html.dark *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(255, 255, 255, 0.32);
   }
   .tabular-nums {
     font-variant-numeric: tabular-nums;
@@ -553,4 +587,107 @@
 
 .canon-diff .d2h-file-side-diff:last-child {
   border-right: 0;
+}
+
+/* ==========================================
+   Dark Mode Surface, Diff & Shiki Overrides
+   ========================================== */
+html.dark .bg-prism-canvas {
+  background-color: #0B0D12;
+  background-image:
+    radial-gradient(ellipse 72% 78% at 10% 4%, rgba(251, 146, 60, 0.14) 0%, rgba(249, 115, 22, 0.06) 44%, rgba(251, 146, 60, 0) 78%),
+    radial-gradient(ellipse 55% 65% at 24% 34%, rgba(253, 186, 116, 0.08) 0%, rgba(251, 146, 60, 0.03) 48%, rgba(251, 146, 60, 0) 80%),
+    radial-gradient(ellipse 62% 72% at 52% 2%, rgba(129, 140, 248, 0.18) 0%, rgba(129, 140, 248, 0.07) 46%, rgba(129, 140, 248, 0) 78%),
+    radial-gradient(ellipse 65% 74% at 90% 0%, rgba(56, 189, 248, 0.16) 0%, rgba(56, 189, 248, 0.06) 45%, rgba(56, 189, 248, 0) 78%);
+}
+
+html.dark .card-porcelain {
+  background-color: #12151E;
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.35),
+    0 16px 36px -16px rgba(0, 0, 0, 0.55);
+}
+
+html.dark .btn-obsidian {
+  background: linear-gradient(180deg, #2A3044 0%, #1B1F2E 100%);
+  color: #F8FAFC;
+  border: 1px solid rgba(129, 140, 248, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+html.dark .btn-obsidian:hover:not(:disabled) {
+  background: linear-gradient(180deg, #343C54 0%, #23283B 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 6px 18px -2px rgba(0, 0, 0, 0.45),
+    0 0 0 1px rgba(129, 140, 248, 0.3);
+}
+
+html.dark .editorial-prose pre,
+html.dark .editorial-prose .shiki,
+html.dark .canon-codeblock pre.shiki,
+html.dark .canon-codeblock pre {
+  background-color: #0D1017 !important;
+}
+
+html.dark .shiki,
+html.dark .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: transparent !important;
+}
+
+html.dark .canon-diff .d2h-ins {
+  background-color: rgba(16, 185, 129, 0.14);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+html.dark .canon-diff .d2h-ins .d2h-code-line-ctn ins,
+html.dark .canon-diff ins {
+  background-color: rgba(16, 185, 129, 0.28);
+  color: #6EE7B7;
+}
+
+html.dark .canon-diff .d2h-del {
+  background-color: rgba(239, 68, 68, 0.14);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+html.dark .canon-diff .d2h-del .d2h-code-line-ctn del,
+html.dark .canon-diff del {
+  background-color: rgba(239, 68, 68, 0.28);
+  color: #FCA5A5;
+}
+
+html.dark .bg-white {
+  background-color: #12151E;
+}
+html.dark .bg-white\/85 {
+  background-color: rgba(18, 21, 30, 0.85);
+}
+html.dark .bg-white\/80 {
+  background-color: rgba(18, 21, 30, 0.80);
+}
+html.dark .bg-white\/75 {
+  background-color: rgba(18, 21, 30, 0.75);
+}
+html.dark .bg-white\/70 {
+  background-color: rgba(18, 21, 30, 0.70);
+}
+html.dark .hover\:bg-white:hover {
+  background-color: #1A1E2B;
+}
+html.dark .from-\[\#F8F9FB\] {
+  --tw-gradient-from: #0B0D12;
+}
+html.dark .via-\[\#F8F9FB\]\/92 {
+  --tw-gradient-via: rgba(11, 13, 18, 0.92);
+}
+html.dark .border-\[rgba\(17\,18\,22\,0\.08\)\] {
+  border-color: rgba(255, 255, 255, 0.09);
+}
+html.dark .border-\[rgba\(17\,18\,22\,0\.06\)\] {
+  border-color: rgba(255, 255, 255, 0.07);
 }

@@ -88,8 +88,8 @@ export function EffortTierSelector({
                 ? 'text-muted/85 bg-recessed/60 hover:bg-recessed hover:text-slate-ink cursor-pointer border border-transparent'
                 : isActive
                 ? opt.id === 'overkill'
-                  ? 'bg-obsidian text-white shadow-xs prism-aura cursor-pointer'
-                  : 'bg-obsidian text-white shadow-xs cursor-pointer'
+                  ? 'btn-obsidian shadow-xs prism-aura cursor-pointer'
+                  : 'btn-obsidian shadow-xs cursor-pointer'
                 : 'text-slate-ink hover:text-obsidian hover:bg-porcelain cursor-pointer'
             }`}
           >

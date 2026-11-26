@@ -33,7 +33,7 @@ export function CodeBlock({ code, lang = 'text', className = '' }: CodeBlockProp
     return (
       <div
         dir="ltr"
-        className={`canon-codeblock border border-hairline rounded-md overflow-x-auto bg-[#F4F6FA] ${className}`}
+        className={`canon-codeblock border border-hairline rounded-md overflow-x-auto bg-[#F4F6FA] dark:bg-[#0D1017] ${className}`}
         dangerouslySetInnerHTML={{ __html: highlightedHtml }}
       />
     );
@@ -42,7 +42,7 @@ export function CodeBlock({ code, lang = 'text', className = '' }: CodeBlockProp
   return (
     <div
       dir="ltr"
-      className={`canon-codeblock border border-hairline rounded-md overflow-x-auto bg-[#F4F6FA] ${className}`}
+      className={`canon-codeblock border border-hairline rounded-md overflow-x-auto bg-[#F4F6FA] dark:bg-[#0D1017] ${className}`}
     >
       <pre className="font-mono text-[12.5px] leading-[1.6] text-ink p-4 whitespace-pre">
         <code>{code}</code>

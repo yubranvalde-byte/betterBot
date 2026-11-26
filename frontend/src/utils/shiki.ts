@@ -39,9 +39,10 @@ function getHighlighter(): Promise<HighlighterCore> {
       import('shiki/core'),
       import('shiki/engine/javascript'),
       import('shiki/themes/github-light.mjs'),
-    ]).then(([core, engine, githubLight]) =>
+      import('shiki/themes/github-dark.mjs'),
+    ]).then(([core, engine, githubLight, githubDark]) =>
       core.createHighlighterCore({
-        themes: [githubLight.default],
+        themes: [githubLight.default, githubDark.default],
         langs: [],
         engine: engine.createJavaScriptRegexEngine(),
       }),
@@ -83,6 +84,9 @@ export async function highlightCode(code: string, rawLang?: string): Promise<str
   await ensureLanguageLoaded(highlighter, lang);
   return highlighter.codeToHtml(code, {
     lang,
-    theme: 'github-light',
+    themes: {
+      light: 'github-light',
+      dark: 'github-dark',
+    },
   });
 }
